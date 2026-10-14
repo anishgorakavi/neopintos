@@ -1,0 +1,4 @@
+# Tests whose outcome is nondeterministic in the unmodified all-C kernel (USE_RUST=0):
+# observed both pass and FAIL across identical stock builds.  check.sh does not treat a
+# change in these as a regression, and reports it.
+tests/threads/alarm-priority

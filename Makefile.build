@@ -51,7 +51,9 @@ lib_SRC += lib/ustar.c			# Unix standard tar format utilities.
 # Kernel-specific library code.
 lib/kernel_SRC  = lib/kernel/debug.c	# Debug helpers.
 lib/kernel_SRC += lib/kernel/list.c	# Doubly-linked lists.
-lib/kernel_SRC += lib/kernel/bitmap.c	# Bitmaps.
+ifneq ($(USE_RUST),1)
+lib/kernel_SRC += lib/kernel/bitmap.c	# Bitmaps (Rust: rust/src/bitmap.rs).
+endif
 lib/kernel_SRC += lib/kernel/hash.c	# Hash tables.
 lib/kernel_SRC += lib/kernel/console.c	# printf(), putchar().
 
@@ -81,8 +83,22 @@ DEPENDS = $(patsubst %.o,%.d,$(OBJECTS))
 threads/kernel.lds.s: CPPFLAGS += -P
 threads/kernel.lds.s: threads/kernel.lds.S threads/loader.h
 
-kernel.o: threads/kernel.lds.s $(OBJECTS) 
-	$(LD) -T $< -o $@ $(OBJECTS)
+# Rust static library (see rust/).  Cargo decides what needs rebuilding; the
+# archive is only touched when something changed, so kernel.o is not relinked
+# needlessly.  RUST_FEATURES is set per project in */Make.vars.
+ifeq ($(USE_RUST),1)
+RUST_LIB = $(CURDIR)/rust-target/i686-pintos/release/libpintos_rs.a
+kernel.bin: CPPFLAGS += -DRUST
+
+$(RUST_LIB): FORCE
+	cd $(SRCDIR)/rust && env -u MAKEFLAGS -u MFLAGS CARGO_TARGET_DIR=$(CURDIR)/rust-target \
+		$(CARGO) build --release --features "$(RUST_FEATURES)"
+
+FORCE:
+endif
+
+kernel.o: threads/kernel.lds.s $(OBJECTS) $(RUST_LIB)
+	$(LD) -T $< -o $@ $(OBJECTS) $(RUST_LIB)
 
 kernel.bin: kernel.o
 	$(OBJCOPY) -R .note -R .comment -S $< $@
@@ -101,6 +117,7 @@ clean::
 	rm -f threads/loader.o threads/kernel.lds.s threads/loader.d
 	rm -f kernel.bin.tmp
 	rm -f kernel.o kernel.lds.s
+	rm -rf rust-target
 	rm -f kernel.bin loader.bin
 	rm -f bochsout.txt bochsrc.txt
 	rm -f results grade

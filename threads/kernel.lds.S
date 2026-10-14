@@ -12,19 +12,22 @@ SECTIONS
   . = _start + SIZEOF_HEADERS;
 
   /* Kernel starts with code, followed by read-only data and writable data. */
-  .text : { *(.start) *(.text) } = 0x90
+  /* The *.* patterns catch per-symbol sections (.text.foo, .data.foo, .bss.foo)
+     emitted by Rust code; without them such orphan sections would land outside
+     [_start_bss, _end_bss) and statics would not be zeroed. */
+  .text : { *(.start) *(.text) *(.text.*) } = 0x90
   .rodata : { *(.rodata) *(.rodata.*) 
 	      . = ALIGN(0x1000); 
 	      _end_kernel_text = .; }
   .eh_frame : { *(.eh_frame) }
-  .data : { *(.data) 
+  .data : { *(.data) *(.data.*)
 	    _signature = .; LONG(0xaa55aa55) }
 
   .plt : { *(.plt*) }
 
   /* BSS (zero-initialized data) is after everything else. */
   _start_bss = .;
-  .bss : { *(.bss) }
+  .bss : { *(.bss) *(.bss.*) }
   _end_bss = .;
 
   _end = .;

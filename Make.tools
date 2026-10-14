@@ -24,3 +24,11 @@ SIMULATOR = --qemu
 
 # QEMU binary used by utils/pintos
 export PINTOS_QEMU = qemu-system-i386
+
+# --- Rust components (see rust/ and README.md) ---
+# USE_RUST = 1 links the Rust static library into the kernel and builds the
+# subsystems that have been ported to Rust from it.  USE_RUST = 0 builds the
+# original all-C kernel.  Both must pass exactly the same tests.
+# Needs the nightly toolchain pinned in rust/rust-toolchain.toml (./setup-rust.sh).
+USE_RUST ?= 1
+CARGO = cargo

@@ -38,6 +38,12 @@
 #include "filesys/fsutil.h"
 #endif
 
+#ifdef RUST
+/* Rust components (see rust/). */
+void rust_init (void);
+void rust_selftest (char **argv);
+#endif
+
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -95,6 +101,9 @@ int main (void)
   palloc_init (user_page_limit);
   malloc_init ();
   paging_init ();
+#ifdef RUST
+  rust_init ();
+#endif
 
   /* Segmentation. */
 #ifdef USERPROG
@@ -299,6 +308,9 @@ static void run_actions (char **argv)
   /* Table of supported actions. */
   static const struct action actions[] = {
       {"run", 2, run_task},
+#ifdef RUST
+      {"rust-selftest", 1, rust_selftest},
+#endif
 #ifdef FILESYS
       {"ls", 1, fsutil_ls},
       {"cat", 2, fsutil_cat},

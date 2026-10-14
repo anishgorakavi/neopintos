@@ -1,0 +1,5 @@
+# Pinned nightly: the kernel needs build-std (core + alloc) for a custom bare-metal target.
+[toolchain]
+channel = "nightly-2026-08-01"
+profile = "minimal"
+components = ["rust-src"]

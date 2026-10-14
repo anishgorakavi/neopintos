@@ -1,0 +1,6 @@
+[build]
+target = "i686-pintos.json"
+
+[unstable]
+build-std = ["core", "alloc"]
+json-target-spec = true

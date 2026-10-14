@@ -5,3 +5,4 @@ utils/squish-unix
 *.o
 *.d
 .DS_Store
+rust/target/

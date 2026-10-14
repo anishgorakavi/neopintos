@@ -1,0 +1,27 @@
+[package]
+name = "pintos_rs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust components of the Pintos kernel, linked into kernel.o as a static library"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+# One feature per project that adds C symbols the Rust code may call.
+[features]
+default = []
+userprog = []
+vm = ["userprog"]
+filesys = []
+
+[profile.release]
+opt-level = 2
+panic = "abort"
+overflow-checks = true   # integer overflow is a bug here, not wraparound
+debug = 1
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
+opt-level = 2
