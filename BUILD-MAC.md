@@ -17,6 +17,23 @@ userprog; filesys and vm build, but their `make check` runs were not tried.
 
 Run every command below from the repo root after `source env.sh`.
 
+## Changing the toolchain
+
+All tool choices live in **`Make.tools`** (included by `Make.config`); no other
+Makefile names a compiler. Override without editing it:
+
+```sh
+make CROSS_PREFIX=i386-elf-            # one-off, command line
+CC=/path/to/i686-elf-gcc make          # one-off, environment
+cp Make.tools.local.example Make.tools.local   # permanent, git-ignored
+```
+
+It auto-picks: native `gcc -m32` on x86 Linux, `i686-elf-*` (or `i386-elf-*`)
+cross tools on macOS/ARM Linux/Windows (MSYS2, Cygwin; WSL counts as Linux).
+Set `SIMULATOR = --bochs` or `PINTOS_QEMU = <path>` to change the simulator.
+Windows needs `make`, `perl` and a POSIX shell, and an ELF-targeting cross
+compiler; the Linux and Windows paths are untested here, only macOS was run.
+
 ## Project 1 — threads
 
 ```sh

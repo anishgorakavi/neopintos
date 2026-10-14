@@ -7,15 +7,17 @@ Only build/tooling files were touched. No kernel, library or test source
 
 | File | Change | Why |
 |---|---|---|
-| `Make.config` | On a non-x86 host, use `i686-elf-gcc/ld/objcopy` (fall back to `i386-elf-*`); define `AR`/`RANLIB` as the matching cross `ar`/`ranlib` (default `ar`/`ranlib` elsewhere) | Original only knew `i386-elf-*`, which Homebrew doesn't ship |
+| `Make.config` | Tool selection block replaced by `include Make.tools` | Single place to configure tools (see below) |
 | `Makefile.userprog` | `libc.a` built with `$(AR)`/`$(RANLIB)` instead of bare `ar`/`ranlib` | macOS `ar` can't index ELF objects, so user programs failed to link |
-| `threads/Make.vars`, `userprog/Make.vars`, `filesys/Make.vars`, `vm/Make.vars` | `SIMULATOR = --qemu` (was `--bochs`) | Bochs isn't installed/practical on ARM Macs |
-| `utils/pintos` | (1) default simulator is bochs only if installed, else qemu; (2) default VGA is `window` on macOS (was only when `$DISPLAY` set); (3) skip `setpgrp(0,0)` when stdin is a tty | (1) no Bochs; (2) macOS has no `$DISPLAY`, so no window appeared; (3) QEMU was put in a background process group and macOS froze it on tty access |
+| `threads/Make.vars`, `userprog/Make.vars`, `filesys/Make.vars`, `vm/Make.vars` | Removed the `SIMULATOR = --bochs` line | Simulator is now set centrally in `Make.tools` (default `--qemu`) |
+| `utils/pintos` | (1) default simulator is bochs only if installed, else qemu; (2) default VGA is `window` on macOS (was only when `$DISPLAY` set); (3) skip `setpgrp(0,0)` when stdin is a tty; (4) qemu binary taken from `$PINTOS_QEMU` | (1) no Bochs; (2) macOS has no `$DISPLAY`, so no window appeared; (3) QEMU was put in a background process group and macOS froze it on tty access |
 | `utils/pintos-gdb` | `GDBMACROS` points to `misc/gdb-macros` in this repo | Original path was a hardcoded university server path |
 | `utils/Makefile` | `all:` builds `setitimer-helper` only | `squish-pty.c`/`squish-unix.c` need `stropts.h`, absent on macOS (only needed for Bochs terminal / serial piping) |
 
 ## Added files
 
+- `Make.tools` — central toolchain/simulator definition (CC, LD, OBJCOPY, AR, RANLIB, SIMULATOR, PINTOS_QEMU) with Linux, macOS and Windows (MSYS2/Cygwin/WSL) detection. Override order: command line, environment, `Make.tools.local`, defaults.
+- `Make.tools.local.example` — template for personal overrides (`Make.tools.local` is git-ignored).
 - `setup-mac.sh` — one-time Homebrew install (`i686-elf-gcc`, `i686-elf-binutils`, `qemu`, optional `i386-elf-gdb`) and `utils` build.
 - `env.sh` — `source` it to put `utils/` on `PATH`.
 - `BUILD-MAC.md` — build/run guide per project, troubleshooting.
