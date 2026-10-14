@@ -1,115 +1,26 @@
 # -*- makefile -*-
 #
-# Central toolchain definition for Pintos.  Every project Makefile gets its
-# tools from here (via Make.config), so this is the ONE place to change them.
-#
-# How a value is chosen (highest priority first):
-#   1. the command line         make CC=my-gcc ...
-#   2. the environment          CC=my-gcc make ...
-#   3. Make.tools.local         your personal overrides (git-ignored, optional)
-#   4. the per-platform defaults below
-#
-# Variables provided:
-#   CC LD OBJCOPY AR RANLIB   compiler/binutils that target 32-bit x86 ELF
-#   SIMULATOR                 flag passed to utils/pintos: --qemu or --bochs
-#   PINTOS_QEMU               qemu binary used by utils/pintos
-#
-# Shortcut: set CROSS_PREFIX (e.g. i686-elf-) and CC/LD/OBJCOPY/AR/RANLIB all
-# follow.  Set CROSS_PREFIX to the empty string to force the host's own tools.
-#
-# Platforms:
-#   Linux x86/x86-64      native gcc (-m32 on x86-64)            [no install]
-#   Linux ARM, BSD        cross tools (i686-elf-*, or i386-elf-*)
-#   macOS (Apple/Intel)   cross tools: brew install i686-elf-gcc
-#                         i686-elf-binutils qemu                 (setup-mac.sh)
-#   Windows               run inside MSYS2, Cygwin or WSL (make, perl and a
-#                         POSIX shell are required).  WSL counts as Linux.
-#                         In MSYS2/Cygwin use an i686-elf cross toolchain.  A
-#                         PE-targeting MinGW gcc will NOT work: Pintos needs
-#                         ELF output.
-# The cross tools must emit ELF; a plain Mach-O/PE compiler will not link.
+# The ONE place Pintos tools are defined.  Edit these lines for your machine.
+# Pintos needs a compiler/linker that produces 32-bit x86 ELF.
 
-TOOLS_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+# --- macOS (Homebrew: i686-elf-gcc, i686-elf-binutils, qemu) ---
+CC      = i686-elf-gcc
+LD      = i686-elf-ld
+OBJCOPY = i686-elf-objcopy
+AR      = i686-elf-ar
+RANLIB  = i686-elf-ranlib
 
-# Personal overrides.  Plain '=' / ':=' assignments here win over the defaults.
--include $(TOOLS_DIR)/Make.tools.local
+# --- x86-64 Linux (native, no cross compiler) ---
+#CC      = gcc -m32
+#LD      = ld -melf_i386
+#OBJCOPY = objcopy
+#AR      = ar
+#RANLIB  = ranlib
 
-# Assign $(1) := $(2) only if nothing (cmdline/env/local file) set it already.
-# (Needed because make pre-defines CC, LD, AR; '?=' would not replace those.)
-define TOOLS_DEFAULT
-ifneq ($$(filter default undefined,$$(origin $(1))),)
-$(1) := $(2)
-endif
-endef
+# --- Windows (MSYS2/Cygwin with an i686-elf toolchain): same as macOS ---
 
-# ---- Host detection --------------------------------------------------------
-UNAME_S := $(shell uname -s 2>/dev/null)
-UNAME_M := $(shell uname -m 2>/dev/null)
+# Simulator: --qemu or --bochs
+SIMULATOR = --qemu
 
-ifneq ($(filter MINGW% MSYS% CYGWIN%,$(UNAME_S)),)
-  HOST_OS = windows
-else ifeq ($(UNAME_S),Darwin)
-  HOST_OS = macos
-else ifeq ($(UNAME_S),Linux)
-  HOST_OS = linux
-else
-  HOST_OS = other
-endif
-
-X86    = i.86\|pentium.*\|[pk][56]\|nexgen\|viac3\|6x86\|athlon.*\|i86pc
-X86_64 = x86_64\|amd64
-
-# Native 32-bit-capable x86 host that is not macOS/Windows?
-ifneq ($(filter linux other,$(HOST_OS)),)
-  ifneq (0,$(shell expr "$(UNAME_M)" : '$(X86)'))
-    NATIVE = x86
-  else ifneq (0,$(shell expr "$(UNAME_M)" : '$(X86_64)'))
-    NATIVE = x86_64
-  endif
-endif
-
-# ---- Choose tools ----------------------------------------------------------
-ifneq ($(origin CROSS_PREFIX),undefined)
-  # Explicit prefix (possibly empty): use it as given.
-  T_CC      = $(CROSS_PREFIX)gcc
-  T_LD      = $(CROSS_PREFIX)ld
-  T_OBJCOPY = $(CROSS_PREFIX)objcopy
-  T_AR      = $(CROSS_PREFIX)ar
-  T_RANLIB  = $(CROSS_PREFIX)ranlib
-else ifeq ($(NATIVE),x86)
-  T_CC = gcc
-  T_LD = ld
-  T_OBJCOPY = objcopy
-  T_AR = ar
-  T_RANLIB = ranlib
-else ifeq ($(NATIVE),x86_64)
-  # Use gcc-11 if present (matches the course's reference compiler).
-  T_CC = $(if $(shell command -v gcc-11 2>/dev/null),gcc-11,gcc) -m32
-  T_LD = ld -melf_i386
-  T_OBJCOPY = objcopy
-  T_AR = ar
-  T_RANLIB = ranlib
-else
-  # Cross compiling: first installed prefix wins.
-  AUTO_PREFIX := $(firstword $(foreach p,i686-elf- i386-elf-,$(if $(shell command -v $(p)gcc 2>/dev/null),$(p))))
-  ifeq ($(AUTO_PREFIX),)
-    AUTO_PREFIX = i686-elf-
-  endif
-  T_CC      = $(AUTO_PREFIX)gcc
-  T_LD      = $(AUTO_PREFIX)ld
-  T_OBJCOPY = $(AUTO_PREFIX)objcopy
-  T_AR      = $(AUTO_PREFIX)ar
-  T_RANLIB  = $(AUTO_PREFIX)ranlib
-endif
-
-$(eval $(call TOOLS_DEFAULT,CC,$(T_CC)))
-$(eval $(call TOOLS_DEFAULT,LD,$(T_LD)))
-$(eval $(call TOOLS_DEFAULT,OBJCOPY,$(T_OBJCOPY)))
-$(eval $(call TOOLS_DEFAULT,AR,$(T_AR)))
-$(eval $(call TOOLS_DEFAULT,RANLIB,$(T_RANLIB)))
-
-# ---- Simulator -------------------------------------------------------------
-# QEMU everywhere by default.  For Bochs: SIMULATOR = --bochs
-$(eval $(call TOOLS_DEFAULT,SIMULATOR,--qemu))
-$(eval $(call TOOLS_DEFAULT,PINTOS_QEMU,qemu-system-i386))
-export PINTOS_QEMU
+# QEMU binary used by utils/pintos
+export PINTOS_QEMU = qemu-system-i386

@@ -5,4 +5,3 @@ utils/squish-unix
 *.o
 *.d
 .DS_Store
-Make.tools.local

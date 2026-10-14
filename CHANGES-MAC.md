@@ -16,8 +16,7 @@ Only build/tooling files were touched. No kernel, library or test source
 
 ## Added files
 
-- `Make.tools` — central toolchain/simulator definition (CC, LD, OBJCOPY, AR, RANLIB, SIMULATOR, PINTOS_QEMU) with Linux, macOS and Windows (MSYS2/Cygwin/WSL) detection. Override order: command line, environment, `Make.tools.local`, defaults.
-- `Make.tools.local.example` — template for personal overrides (`Make.tools.local` is git-ignored).
+- `Make.tools` — plain list of tool definitions (CC, LD, OBJCOPY, AR, RANLIB, SIMULATOR, PINTOS_QEMU); edit it to change tools.
 - `setup-mac.sh` — one-time Homebrew install (`i686-elf-gcc`, `i686-elf-binutils`, `qemu`, optional `i386-elf-gdb`) and `utils` build.
 - `env.sh` — `source` it to put `utils/` on `PATH`.
 - `BUILD-MAC.md` — build/run guide per project, troubleshooting.

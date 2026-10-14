@@ -1,6 +1,0 @@
-# Copy to Make.tools.local to override tools without editing Make.tools.
-# Examples:
-# CROSS_PREFIX = i686-elf-                 # all tools from one prefix
-# CC = /opt/my-toolchain/bin/i686-elf-gcc  # or set tools individually
-# SIMULATOR = --bochs
-# PINTOS_QEMU = /c/msys64/mingw64/bin/qemu-system-i386.exe
