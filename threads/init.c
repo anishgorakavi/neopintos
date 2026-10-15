@@ -83,6 +83,7 @@ static void locate_block_device (enum block_type, const char *name);
  * facilities
  *returns, a kernel panic, segfault IDK?
  */
+
 void segfault_test() {
   printf("INTENTIONALLY SEGFAULTING!!!!!!!\n");
   int* p = 0; //null basically
@@ -148,7 +149,7 @@ int main (void)
 
   printf ("Boot complete.\n");
   //UNCOMMENT if you really want to test segfaults
-  segfault_test(); //null deref test
+  //segfault_test(); //null deref test
   /* Run actions specified on kernel command line. */
   run_actions (argv);
 

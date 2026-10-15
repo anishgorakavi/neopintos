@@ -13,7 +13,7 @@ The kernel, lib, devices and tests are the stock skeleton. Most projects are **i
 
 ## Layout
 
-`threads/ userprog/ vm/ filesys/` = projects 1-4 (each has `Make.vars`, builds in `<proj>/build/`). `devices/ lib/` kernel + libc. `tests/` suites and `.ck` checkers. `examples/` user programs. `utils/` `pintos` launcher (Perl). `rust/` Rust crate, baselines, check script. `Make.tools` = the one place toolchain vars live (`CC LD OBJCOPY AR RANLIB SIMULATOR PINTOS_QEMU USE_RUST CARGO`).
+`threads/ userprog/ vm/ filesys/` = projects 1-4 (each has `Make.vars`, builds in `<proj>/build/`). `devices/ lib/` kernel + libc. `tests/` suites and `.ck` checkers. `examples/` user programs. `utils/` `pintos` launcher and disk tools (Python 3 + `pintos_common.py`; Perl originals in `old_pintos_scripts/`; `tests/` checkers are still Perl). `rust/` Rust crate, baselines, check script. `Make.tools` = the one place toolchain vars live (`CC LD OBJCOPY AR RANLIB SIMULATOR PINTOS_QEMU USE_RUST CARGO`).
 
 ## Building and testing
 

@@ -1,134 +1,25 @@
-#! /usr/bin/perl -w
+#!/usr/bin/env python3
+"""pintos: run Pintos in a simulator (QEMU, Bochs or VMware Player)."""
+from __future__ import annotations
+import argparse
+import atexit
+import os
+import re
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+from dataclasses import dataclass, field
+from typing import BinaryIO, Dict, List, NamedTuple, NoReturn, Optional, \
+    Sequence, Tuple
+import pintos_common as pc
 
-use strict;
-use warnings;
-use POSIX;
-use Fcntl;
-use File::Temp 'tempfile';
-use Getopt::Long qw(:config bundling);
-use Fcntl qw(SEEK_SET SEEK_CUR);
 
-# Read Pintos.pm from the same directory as this program.
-BEGIN { my $self = $0; $self =~ s%/+[^/]*$%%; require "$self/Pintos.pm"; }
-
-# Command-line options.
-our ($start_time) = time ();
-our ($sim);			# Simulator: bochs, qemu, or player.
-our ($debug) = "none";		# Debugger: none, monitor, or gdb.
-our ($mem) = 4;			# Physical RAM in MB.
-our ($serial) = 1;		# Use serial port for input and output?
-our ($vga);			# VGA output: window, terminal, or none.
-our ($jitter);			# Seed for random timer interrupts, if set.
-our ($realtime);		# Synchronize timer interrupts with real time?
-our ($timeout);			# Maximum runtime in seconds, if set.
-our ($kill_on_failure);		# Abort quickly on test failure?
-our (@puts);			# Files to copy into the VM.
-our (@gets);			# Files to copy out of the VM.
-our ($as_ref);			# Reference to last addition to @gets or @puts.
-our (@kernel_args);		# Arguments to pass to kernel.
-our (%parts);			# Partitions.
-our ($make_disk);		# Name of disk to create.
-our ($tmp_disk) = 1;		# Delete $make_disk after run?
-our (@disks);			# Extra disk images to pass to simulator.
-our ($loader_fn);		# Bootstrap loader.
-our (%geometry);		# IDE disk geometry.
-our ($align);			# Partition alignment.
-our ($gdb_port) = $ENV{"GDB_PORT"} || "1234"; # Port to listen on for GDB
-
-parse_command_line ();
-prepare_scratch_disk ();
-find_disks ();
-run_vm ();
-finish_scratch_disk ();
-sub SIGVTALRM;
-
-exit 0;
-
-# Parses the command line.
-sub parse_command_line {
-    usage (0) if @ARGV == 0 || (@ARGV == 1 && $ARGV[0] eq '--help');
-
-    @kernel_args = @ARGV;
-    if (grep ($_ eq '--', @kernel_args)) {
-	@ARGV = ();
-	while ((my $arg = shift (@kernel_args)) ne '--') {
-	    push (@ARGV, $arg);
-	}
-	GetOptions ("sim=s" => sub { set_sim ($_[1]) },
-		    "bochs" => sub { set_sim ("bochs") },
-		    "qemu" => sub { set_sim ("qemu") },
-		    "player" => sub { set_sim ("player") },
-
-		    "debug=s" => sub { set_debug ($_[1]) },
-		    "no-debug" => sub { set_debug ("none") },
-		    "monitor" => sub { set_debug ("monitor") },
-		    "gdb" => sub { set_debug ("gdb") },
-
-		    "m|memory=i" => \$mem,
-		    "j|jitter=i" => sub { set_jitter ($_[1]) },
-		    "r|realtime" => sub { set_realtime () },
-
-		    "T|timeout=i" => \$timeout,
-		    "k|kill-on-failure" => \$kill_on_failure,
-
-		    "v|no-vga" => sub { set_vga ('none'); },
-		    "s|no-serial" => sub { $serial = 0; },
-		    "t|terminal" => sub { set_vga ('terminal'); },
-
-		    "p|put-file=s" => sub { add_file (\@puts, $_[1]); },
-		    "g|get-file=s" => sub { add_file (\@gets, $_[1]); },
-		    "a|as=s" => sub { set_as ($_[1]); },
-
-		    "h|help" => sub { usage (0); },
-
-		    "kernel=s" => \&set_part,
-		    "filesys=s" => \&set_part,
-		    "swap=s" => \&set_part,
-
-		    "filesys-size=s" => \&set_part,
-		    "scratch-size=s" => \&set_part,
-		    "swap-size=s" => \&set_part,
-
-		    "kernel-from=s" => \&set_part,
-		    "filesys-from=s" => \&set_part,
-		    "swap-from=s" => \&set_part,
-
-		    "make-disk=s" => sub { $make_disk = $_[1];
-					   $tmp_disk = 0; },
-		    "disk=s" => sub { set_disk ($_[1]); },
-		    "loader=s" => \$loader_fn,
-
-		    "geometry=s" => \&set_geometry,
-		    "align=s" => \&set_align)
-	  or exit 1;
-    }
-
-    $sim = (`command -v bochs 2>/dev/null` ne "" ? "bochs" : "qemu") if !defined $sim;
-    $debug = "none" if !defined $debug;
-    $vga = (exists ($ENV{DISPLAY}) || $^O eq "darwin") ? "window" : "none" if !defined $vga;
-
-    undef $timeout, print "warning: disabling timeout with --$debug\n"
-      if defined ($timeout) && $debug ne 'none';
-
-    print "warning: enabling serial port for -k or --kill-on-failure\n"
-      if $kill_on_failure && !$serial;
-
-    $align = "bochs",
-      print STDERR "warning: setting --align=bochs for Bochs support\n"
-	if $sim eq 'bochs' && defined ($align) && $align eq 'none';
-
-    $kill_on_failure = 0;
-}
-
-# usage($exitcode).
-# Prints a usage message and exits with $exitcode.
-#behavior of timeout changed from that below to the new version printed
-#  -T, --timeout=N          Kill Pintos after N seconds CPU time
-#                           seconds wall-clock time (whichever comes first)
-sub usage {
-    my ($exitcode) = @_;
-    $exitcode = 1 unless defined $exitcode;
-    print <<'EOF';
+USAGE = """\
 pintos, a utility for running Pintos in a simulator
 Usage: pintos [OPTION...] -- [ARGUMENT...]
 where each OPTION is one of the following options
@@ -177,791 +68,965 @@ Advanced disk configuration options:
   --align=none             Don't align partitions at all, to save space
 Other options:
   -h, --help               Display this help message.
-EOF
-    exit $exitcode;
-}
+"""
 
-# Sets the simulator.
-sub set_sim {
-    my ($new_sim) = @_;
-    die "--$new_sim conflicts with --$sim\n"
-	if defined ($sim) && $sim ne $new_sim;
-    $sim = $new_sim;
-}
+# QEMU's isa-debug-exit device only allows odd exit statuses, so the kernel
+# cannot exit with 0.  Exit status 0x63 is the alternate "clean" status.
+QEMU_CLEAN_EXIT = 0x63
 
-# Sets the debugger.
-sub set_debug {
-    my ($new_debug) = @_;
-    die "--$new_debug conflicts with --$debug\n"
-	if $debug ne 'none' && $new_debug ne 'none' && $debug ne $new_debug;
-    $debug = $new_debug;
-}
+# Seconds to let a failed run go on, to collect more output, before killing.
+FAILURE_GRACE_SECONDS = 5
 
-# Sets VGA output destination.
-sub set_vga {
-    my ($new_vga) = @_;
-    if (defined ($vga) && $vga ne $new_vga) {
-	print "warning: conflicting vga display options\n";
-    }
-    $vga = $new_vga;
-}
+# Largest number of IDE disks (two controllers, two disks each).
+MAX_DISKS = 4
 
-# Sets randomized timer interrupts.
-sub set_jitter {
-    my ($new_jitter) = @_;
-    die "--realtime conflicts with --jitter\n" if defined $realtime;
-    die "different --jitter already defined\n"
-	if defined $jitter && $jitter != $new_jitter;
-    $jitter = $new_jitter;
-}
+# Fixed ustar header fields: files are always root-owned, mode 0644, and
+# dated 2006-01-01.
+USTAR_MODE = 0o644
+USTAR_MTIME = 1136102400
+USTAR_NAME_MAX = 99
 
-# Sets real-time timer interrupts.
-sub set_realtime {
-    die "--realtime conflicts with --jitter\n" if defined $jitter;
-    $realtime = 1;
-}
 
-# add_file(\@list, $file)
-#
-# Adds [$file] to @list, which should be @puts or @gets.
-# Sets $as_ref to point to the added element.
-sub add_file {
-    my ($list, $file) = @_;
-    $as_ref = [$file];
-    push (@$list, $as_ref);
-}
+@dataclass
+class FileSpec:
+    """A file for ``-p`` or ``-g``, with its optional ``-a`` name."""
 
-# Sets the guest/host name for the previous put/get.
-sub set_as {
-    my ($as) = @_;
-    die "-a (or --as) is only allowed after -p or -g\n" if !defined $as_ref;
-    die "Only one -a (or --as) is allowed after -p or -g\n"
-      if defined $as_ref->[1];
-    $as_ref->[1] = $as;
-}
+    name: str
+    alias: Optional[str] = None
 
-# Sets $disk as a disk to be included in the VM to run.
-sub set_disk {
-    my ($disk) = @_;
+    @property
+    def other_name(self) -> str:
+        """The ``-a`` name if given, otherwise the same name."""
+        return self.name if self.alias is None else self.alias
 
-    push (@disks, $disk);
 
-    my (%pt) = read_partition_table ($disk);
-    for my $role (keys %pt) {
-	die "can't have two sources for \L$role\E partition"
-	  if exists $parts{$role};
-	$parts{$role}{DISK} = $disk;
-	$parts{$role}{START} = $pt{$role}{START};
-	$parts{$role}{SECTORS} = $pt{$role}{SECTORS};
-    }
-}
-
-# Locates the files used to back each of the virtual disks,
-# and creates temporary disks.
-sub find_disks {
-    # Find kernel, if we don't already have one.
-    if (!exists $parts{KERNEL}) {
-	my $name = find_file ('kernel.bin');
-	die "Cannot find kernel\n" if !defined $name;
-	do_set_part ('KERNEL', 'file', $name);
-    }
+@dataclass
+class Options:
+    """Everything the command line configures."""
+
+    start_time: float = field(default_factory=time.time)
+    sim: Optional[str] = None            # bochs, qemu or player
+    debug: str = 'none'                  # none, monitor or gdb
+    mem: int = 4                         # Physical RAM in MB.
+    serial: bool = True                  # Use the serial port?
+    vga: Optional[str] = None            # window, terminal or none
+    jitter: Optional[int] = None         # Seed for random timer interrupts.
+    realtime: bool = False               # Timer interrupts follow real time?
+    timeout: Optional[int] = None        # Maximum wall-clock seconds.
+    kill_on_failure: bool = False
+    puts: List[FileSpec] = field(default_factory=list)
+    gets: List[FileSpec] = field(default_factory=list)
+    last_file: Optional[FileSpec] = None  # Target of the next ``-a``.
+    kernel_args: List[str] = field(default_factory=list)
+    parts: Dict[str, pc.Partition] = field(default_factory=dict)
+    make_disk: Optional[str] = None      # Disk to create; kept after the run.
+    disks: List[str] = field(default_factory=list)
+    loader_fn: Optional[str] = None
+    geometry: pc.Geometry = pc.Geometry()
+    align: Optional[str] = None
+    gdb_port: str = field(
+        default_factory=lambda: os.environ.get('GDB_PORT') or '1234')
+
+
+class DiskInfo(NamedTuple):
+    """A disk image's size and the IDE geometry used to describe it."""
+
+    capacity: int      # Sectors.
+    cylinders: int
+    heads: int
+    sectors: int
+
+
+def usage(exit_code: int) -> NoReturn:
+    """Print the usage message and exit with ``exit_code``."""
+    print(USAGE, end='')
+    sys.exit(exit_code)
+
+
+# --------------------------------------------------------------------------
+# Command line.
+
+def build_parser() -> pc.UsageParser:
+    """Create the parser for the options before ``--``."""
+    parser = pc.UsageParser(prog='pintos', add_help=False)
+    add = parser.add_argument
+
+    def flag(*names: str, entry: Tuple[str, object]) -> None:
+        add(*names, action=pc.OrderedAction, nargs=0, const=entry)
+
+    def valued(*names: str, kind: object, **kwargs) -> None:
+        add(*names, action=pc.OrderedAction, const=kind, **kwargs)
+
+    valued('--sim', kind='sim')
+    flag('--bochs', entry=('sim', 'bochs'))
+    flag('--qemu', entry=('sim', 'qemu'))
+    flag('--player', entry=('sim', 'player'))
+
+    valued('--debug', kind='debug')
+    flag('--no-debug', entry=('debug', 'none'))
+    flag('--monitor', entry=('debug', 'monitor'))
+    flag('--gdb', entry=('debug', 'gdb'))
+
+    add('-m', '--memory', type=int, default=4)
+    valued('-j', '--jitter', kind='jitter', type=int)
+    flag('-r', '--realtime', entry=('realtime', None))
+
+    add('-T', '--timeout', type=int)
+    add('-k', '--kill-on-failure', action='store_true')
+
+    flag('-v', '--no-vga', entry=('vga', 'none'))
+    add('-s', '--no-serial', dest='serial', action='store_false')
+    flag('-t', '--terminal', entry=('vga', 'terminal'))
+
+    valued('-p', '--put-file', kind='put')
+    valued('-g', '--get-file', kind='get')
+    valued('-a', '--as', kind='as')
+
+    add('-h', '--help', action='store_true')
+
+    for role, source in (('kernel', 'file'), ('filesys', 'file'),
+                         ('swap', 'file'), ('filesys', 'size'),
+                         ('scratch', 'size'), ('swap', 'size'),
+                         ('kernel', 'from'), ('filesys', 'from'),
+                         ('swap', 'from')):
+        suffix = '' if source == 'file' else '-' + source
+        valued(f'--{role}{suffix}', kind=(role, source))
+
+    add('--make-disk')
+    valued('--disk', kind='disk')
+    add('--loader')
+    add('--geometry')
+    add('--align')
+    return parser
+
+
+def parse_command_line(argv: Sequence[str]) -> Options:
+    """Parse ``argv`` (without the program name) into ``Options``."""
+    if not argv or list(argv) == ['--help']:
+        usage(0)
+
+    opts = Options()
+    option_args, kernel_args = pc.split_kernel_args(argv)
+    if kernel_args is None:
+        # Without "--", everything is for the kernel.
+        opts.kernel_args = list(argv)
+    else:
+        opts.kernel_args = kernel_args
+        namespace = build_parser().parse_args(
+            option_args, argparse.Namespace(ordered=[]))
+        if namespace.help:
+            usage(0)
+        opts.mem = namespace.memory
+        opts.timeout = namespace.timeout
+        opts.kill_on_failure = namespace.kill_on_failure
+        opts.serial = namespace.serial
+        opts.make_disk = namespace.make_disk
+        opts.loader_fn = namespace.loader
+        if namespace.geometry is not None:
+            opts.geometry = pc.parse_geometry(namespace.geometry)
+        if namespace.align is not None:
+            opts.align = pc.check_alignment(namespace.align)
+        for kind, value in namespace.ordered:
+            apply_option(opts, kind, value)
+
+    if opts.sim is None:
+        opts.sim = 'bochs' if shutil.which('bochs') else 'qemu'
+    if opts.vga is None:
+        opts.vga = ('window'
+                    if 'DISPLAY' in os.environ or sys.platform == 'darwin'
+                    else 'none')
+
+    if opts.timeout is not None and opts.debug != 'none':
+        opts.timeout = None
+        print(f'warning: disabling timeout with --{opts.debug}')
+    if opts.kill_on_failure and not opts.serial:
+        print('warning: enabling serial port for -k or --kill-on-failure')
+    if opts.sim == 'bochs' and opts.align == 'none':
+        opts.align = 'bochs'
+        pc.warn('setting --align=bochs for Bochs support')
+
+    # Kill-on-failure has always been switched off here, whatever -k says
+    # (the test harness relies on QEMU powering itself off).  The output
+    # filter in Supervisor is kept so this can be turned back on.
+    opts.kill_on_failure = False
+    return opts
+
+
+def apply_option(opts: Options, kind: object, value: object) -> None:
+    """Apply one order-dependent option to ``opts``."""
+    if isinstance(kind, tuple):
+        role, source = kind
+        pc.register_partition(opts.parts, role, source, str(value))
+    elif kind == 'sim':
+        set_sim(opts, str(value))
+    elif kind == 'debug':
+        set_debug(opts, str(value))
+    elif kind == 'vga':
+        set_vga(opts, str(value))
+    elif kind == 'jitter':
+        set_jitter(opts, int(str(value)))
+    elif kind == 'realtime':
+        set_realtime(opts)
+    elif kind in ('put', 'get'):
+        spec = opts.last_file = FileSpec(str(value))
+        (opts.puts if kind == 'put' else opts.gets).append(spec)
+    elif kind == 'as':
+        set_as(opts, str(value))
+    elif kind == 'disk':
+        set_disk(opts, str(value))
+    else:
+        raise ValueError(f'unknown option kind {kind!r}')
+
+
+def set_sim(opts: Options, new_sim: str) -> None:
+    """Choose the simulator."""
+    if opts.sim is not None and opts.sim != new_sim:
+        raise pc.PintosError(f'--{new_sim} conflicts with --{opts.sim}')
+    opts.sim = new_sim
+
+
+def set_debug(opts: Options, new_debug: str) -> None:
+    """Choose the debugger."""
+    if (opts.debug != 'none' and new_debug != 'none'
+            and opts.debug != new_debug):
+        raise pc.PintosError(f'--{new_debug} conflicts with --{opts.debug}')
+    opts.debug = new_debug
+
+
+def set_vga(opts: Options, new_vga: str) -> None:
+    """Choose where VGA output goes."""
+    if opts.vga is not None and opts.vga != new_vga:
+        print('warning: conflicting vga display options')
+    opts.vga = new_vga
+
+
+def set_jitter(opts: Options, new_jitter: int) -> None:
+    """Randomize timer interrupts with seed ``new_jitter``."""
+    if opts.realtime:
+        raise pc.PintosError('--realtime conflicts with --jitter')
+    if opts.jitter is not None and opts.jitter != new_jitter:
+        raise pc.PintosError('different --jitter already defined')
+    opts.jitter = new_jitter
+
+
+def set_realtime(opts: Options) -> None:
+    """Make timer interrupts follow real time."""
+    if opts.jitter is not None:
+        raise pc.PintosError('--realtime conflicts with --jitter')
+    opts.realtime = True
+
+
+def set_as(opts: Options, name: str) -> None:
+    """Set the guest/host name of the previous ``-p`` or ``-g``."""
+    if opts.last_file is None:
+        raise pc.PintosError('-a (or --as) is only allowed after -p or -g')
+    if opts.last_file.alias is not None:
+        raise pc.PintosError(
+            'Only one -a (or --as) is allowed after -p or -g')
+    opts.last_file.alias = name
+
+
+def set_disk(opts: Options, disk: str) -> None:
+    """Include the existing disk ``disk``, and the partitions it holds."""
+    opts.disks.append(disk)
+    for role, part in pc.read_partition_table(disk).items():
+        if role in opts.parts:
+            raise pc.PintosError(
+                f"can't have two sources for {role} partition")
+        opts.parts[role] = part
+
+
+# --------------------------------------------------------------------------
+# Temporary files.
+
+_temp_paths: List[str] = []
+
+
+def make_temp_file(suffix: str) -> Tuple[BinaryIO, str]:
+    """Create a temporary file that is deleted when the program exits."""
+    descriptor, path = tempfile.mkstemp(suffix=suffix)
+    _temp_paths.append(path)
+    return os.fdopen(descriptor, 'wb', buffering=0), path
+
+
+def remove_temp_files() -> None:
+    """Delete all the temporary files."""
+    while _temp_paths:
+        try:
+            os.unlink(_temp_paths.pop())
+        except OSError:
+            pass
+
+
+atexit.register(remove_temp_files)
+
+
+# --------------------------------------------------------------------------
+# Disks.
+
+def find_disks(opts: Options) -> None:
+    """Locate the files behind each virtual disk and create the boot disk."""
+    # Find the kernel, if we don't already have one.
+    if 'kernel' not in opts.parts:
+        name = pc.find_file('kernel.bin')
+        if name is None:
+            raise pc.PintosError('Cannot find kernel')
+        pc.set_partition(opts.parts, 'kernel', 'file', name)
 
     # Try to find file system and swap disks, if we don't already have
-    # partitions.
-    if (!exists $parts{FILESYS}) {
-	my $name = find_file ('filesys.dsk');
-	set_disk ($name) if defined $name;
-    }
-    if (!exists $parts{SWAP}) {
-	my $name = find_file ('swap.dsk');
-	set_disk ($name) if defined $name;
-    }
+    # those partitions.
+    for role, base in (('filesys', 'filesys.dsk'), ('swap', 'swap.dsk')):
+        if role not in opts.parts:
+            name = pc.find_file(base)
+            if name is not None:
+                set_disk(opts, name)
 
     # Warn about (potentially) missing partitions.
-    if (my ($project) = `pwd` =~ /\b(threads|userprog|vm|filesys)\b/) {
-	if ((grep ($project eq $_, qw (userprog vm filesys)))
-	    && !defined $parts{FILESYS}) {
-	    print STDERR "warning: it looks like you're running the $project ";
-	    print STDERR "project, but no file system partition is present\n";
-	}
-	if ($project eq 'vm' && !defined $parts{SWAP}) {
-	    print STDERR "warning: it looks like you're running the $project ";
-	    print STDERR "project, but no swap partition is present\n";
-	}
-    }
+    match = re.search(r'\b(threads|userprog|vm|filesys)\b', os.getcwd())
+    if match:
+        project = match.group(1)
+        if project != 'threads' and 'filesys' not in opts.parts:
+            pc.warn(f"it looks like you're running the {project} project, "
+                    'but no file system partition is present')
+        if project == 'vm' and 'swap' not in opts.parts:
+            pc.warn(f"it looks like you're running the {project} project, "
+                    'but no swap partition is present')
 
-    # Open disk handle.
-    my ($handle);
-    if (!defined $make_disk) {
-	($handle, $make_disk) = tempfile (UNLINK => $tmp_disk,
-					  SUFFIX => '.dsk');
-    } else {
-	die "$make_disk: already exists\n" if -e $make_disk;
-	open ($handle, '>', $make_disk) or die "$make_disk: create: $!\n";
-    }
+    # Open the disk to create.
+    if opts.make_disk is None:
+        disk, opts.make_disk = make_temp_file('.dsk')
+    else:
+        if os.path.exists(opts.make_disk):
+            raise pc.PintosError(f'{opts.make_disk}: already exists')
+        disk = open(opts.make_disk, 'wb', buffering=0)
 
-    # Prepare the arguments to pass to the Pintos kernel.
-    my (@args);
-    push (@args, shift (@kernel_args))
-      while @kernel_args && $kernel_args[0] =~ /^-/;
-    push (@args, 'extract') if @puts;
-    push (@args, @kernel_args);
-    push (@args, 'append', $_->[0]) foreach @gets;
+    # Prepare the arguments to pass to the Pintos kernel: leading options
+    # first, then the commands for the scratch disk, then the rest.
+    kernel_args = list(opts.kernel_args)
+    args: List[str] = []
+    while kernel_args and kernel_args[0].startswith('-'):
+        args.append(kernel_args.pop(0))
+    if opts.puts:
+        args.append('extract')
+    args.extend(kernel_args)
+    for get in opts.gets:
+        args.extend(('append', get.name))
 
-    # Make disk.
-    my (%disk);
-    our (@role_order);
-    for my $role (@role_order) {
-	my $p = $parts{$role};
-	next if !defined $p;
-	next if exists $p->{DISK};
-	$disk{$role} = $p;
-    }
-    $disk{DISK} = $make_disk;
-    $disk{HANDLE} = $handle;
-    $disk{ALIGN} = $align;
-    $disk{GEOMETRY} = %geometry;
-    $disk{FORMAT} = 'partitioned';
-    $disk{LOADER} = read_loader ($loader_fn);
-    $disk{ARGS} = \@args;
-    assemble_disk (%disk);
+    # Make the disk from the partitions that aren't already on a disk.
+    new_parts = {role: part for role, part in opts.parts.items()
+                 if part.disk is None}
+    pc.assemble_disk(disk, opts.make_disk, new_parts,
+                     align=opts.align or 'bochs', geometry=opts.geometry,
+                     loader=pc.read_loader(opts.loader_fn), args=args)
 
-    # Put the disk at the front of the list of disks.
-    unshift (@disks, $make_disk);
-    die "can't use more than " . scalar (@disks) . "disks\n" if @disks > 4;
-}
-
-# Prepare the scratch disk for gets and puts.
-sub prepare_scratch_disk {
-    return if !@gets && !@puts;
+    # Put the new disk at the front of the list of disks.
+    opts.disks.insert(0, opts.make_disk)
+    if len(opts.disks) > MAX_DISKS:
+        raise pc.PintosError(f"can't use more than {MAX_DISKS} disks")
 
-    my ($p) = $parts{SCRATCH};
-    # Create temporary partition and write the files to put to it,
-    # then write an end-of-archive marker.
-    my ($part_handle, $part_fn) = tempfile (UNLINK => 1, SUFFIX => '.part');
-    put_scratch_file ($_->[0], defined $_->[1] ? $_->[1] : $_->[0],
-		      $part_handle, $part_fn)
-      foreach @puts;
-    write_fully ($part_handle, $part_fn, "\0" x 1024);
 
-    # Make sure the scratch disk is big enough to get big files
-    # and at least as big as any requested size.
-    my ($size) = round_up (max (@gets * 1024 * 1024, $p->{BYTES} || 0), 512);
-    extend_file ($part_handle, $part_fn, $size);
-    close ($part_handle);
+def disk_geometry(path: str) -> DiskInfo:
+    """Return a valid IDE disk geometry for the disk image ``path``."""
+    size = os.path.getsize(path)
+    if size % pc.SECTOR_SIZE:
+        raise pc.PintosError(
+            f'{path}: size {size} not a multiple of {pc.SECTOR_SIZE} bytes')
+    heads, sectors = 16, 63
+    cylinder_size = pc.SECTOR_SIZE * heads * sectors
+    return DiskInfo(size // pc.SECTOR_SIZE, pc.div_round_up(size,
+                                                            cylinder_size),
+                    heads, sectors)
 
-    if (exists $p->{DISK}) {
-	# Copy the scratch partition to the disk.
-	die "$p->{DISK}: scratch partition too small\n"
-	  if $p->{SECTORS} * 512 < $size;
 
-	my ($disk_handle);
-	open ($part_handle, '<', $part_fn) or die "$part_fn: open: $!\n";
-	open ($disk_handle, '+<', $p->{DISK}) or die "$p->{DISK}: open: $!\n";
-	my ($start) = $p->{START} * 512;
-	sysseek ($disk_handle, $start, SEEK_SET) == $start
-	  or die "$p->{DISK}: seek: $!\n";
-	copy_file ($part_handle, $part_fn, $disk_handle, $p->{DISK}, $size);
-	close ($disk_handle) or die "$p->{DISK}: close: $!\n";
-	close ($part_handle) or die "$part_fn: close: $!\n";
-    } else {
-	# Set $part_fn as the source for the scratch partition.
-	do_set_part ('SCRATCH', 'file', $part_fn);
-    }
-}
+def extend_file(handle: BinaryIO, name: str, size: int) -> None:
+    """Make the file ``handle`` at least ``size`` bytes long."""
+    if os.fstat(handle.fileno()).st_size < size:
+        handle.seek(size - 1)
+        pc.write_fully(handle, name, b'\0')
 
-# Read "get" files from the scratch disk.
-sub finish_scratch_disk {
-    return if !@gets;
 
-    # Open scratch partition.
-    my ($p) = $parts{SCRATCH};
-    my ($part_handle);
-    my ($part_fn) = $p->{DISK};
-    open ($part_handle, '<', $part_fn) or die "$part_fn: open: $!\n";
-    sysseek ($part_handle, $p->{START} * 512, SEEK_SET) == $p->{START} * 512
-      or die "$part_fn: seek: $!\n";
+# --------------------------------------------------------------------------
+# The scratch disk, used by -p and -g.
 
-    # Read each file.
+def ustar_field(number: int, size: int) -> bytes:
+    """Return ``number`` as a ``size``-byte octal field of a ustar header."""
+    out = f'{number:0{size - 1}o}\0'
+    if len(out) != size:
+        raise pc.PintosError(
+            f'{number}: too large for {size}-byte octal ustar field')
+    return out.encode('ascii')
+
+
+def ustar_checksum(header: bytes) -> int:
+    """Return the checksum of a 512-byte ustar header.
+
+    The checksum field itself counts as eight spaces.
+    """
+    if len(header) != pc.SECTOR_SIZE:
+        raise ValueError('ustar header must be 512 bytes')
+    return sum(header[:148]) + 8 * ord(' ') + sum(header[156:])
+
+
+def make_ustar_header(name: bytes, size: int) -> bytes:
+    """Return the ustar header of a regular file ``name`` of ``size`` bytes."""
+    header = b''.join((
+        name.ljust(100, b'\0'),                 # name
+        ustar_field(USTAR_MODE, 8),             # mode
+        ustar_field(0, 8),                      # uid
+        ustar_field(0, 8),                      # gid
+        ustar_field(size, 12),                  # size
+        ustar_field(USTAR_MTIME, 12),           # mtime
+        b' ' * 8,                               # chksum (filled in below)
+        b'0',                                   # typeflag
+        bytes(100),                             # linkname
+        b'ustar\0',                             # magic
+        b'00',                                  # version
+        b'root'.ljust(32, b'\0'),               # uname
+        b'root'.ljust(32, b'\0'),               # gname
+        bytes(8),                               # devmajor
+        bytes(8),                               # devminor
+        bytes(155),                             # prefix
+        bytes(12),                              # pad to 512 bytes
+    ))
+    checksum = ustar_checksum(header)
+    return header[:148] + ustar_field(checksum, 8) + header[156:]
+
+
+def parse_octal(field_bytes: bytes) -> int:
+    """Parse a NUL-terminated octal ustar field; garbage counts as 0."""
+    text = field_bytes.split(b'\0', 1)[0].decode('ascii', 'replace').strip()
+    match = re.match(r'[0-7]*', text)
+    return int(match.group(), 8) if match and match.group() else 0
+
+
+def put_scratch_file(source_name: str, dest_name: str, disk: BinaryIO,
+                     disk_name: str) -> None:
+    """Write ``source_name`` to ``disk`` as ustar member ``dest_name``."""
+    print(f'Copying {source_name} to scratch partition...')
+
+    # The ustar format supports up to 100 characters for a file name, and
+    # even longer names given some common properties, but our code in the
+    # Pintos kernel only supports at most 99 characters.
+    encoded = os.fsencode(dest_name)
+    if len(encoded) > USTAR_NAME_MAX:
+        raise pc.PintosError(
+            f'{dest_name}: name too long (max {USTAR_NAME_MAX} characters)')
+
+    size = os.stat(source_name).st_size
+    pc.write_fully(disk, disk_name, make_ustar_header(encoded, size))
+
+    with open(source_name, 'rb', buffering=0) as source:
+        pc.copy_file(source, source_name, disk, disk_name, size)
+        if os.fstat(source.fileno()).st_size != size:
+            raise pc.PintosError(
+                f'{source_name}: changed size while being read')
+
+    # Round up disk data to the beginning of the next sector.
+    if size % pc.SECTOR_SIZE:
+        pc.write_zeros(disk, disk_name, pc.SECTOR_SIZE - size % pc.SECTOR_SIZE)
+
+
+def get_scratch_file(dest_name: str, disk: BinaryIO,
+                     disk_name: str) -> Optional[str]:
+    """Copy the next ustar member of ``disk`` to the new file ``dest_name``.
+
+    Returns ``None`` on success, otherwise a description of the problem.
+    """
+    print(f'Copying {dest_name} out of {disk_name}...')
+
+    header = pc.read_fully(disk, disk_name, pc.SECTOR_SIZE)
+    if header == bytes(pc.SECTOR_SIZE):
+        return 'scratch disk tar archive ends unexpectedly'
+    if header[257:263] != b'ustar\0':
+        return 'corrupt ustar signature'
+    if header[263:265] != b'00':
+        return 'invalid ustar version'
+    if parse_octal(header[148:156]) != ustar_checksum(header):
+        return 'checksum mismatch'
+    if header[156:157] not in (b'0', b'\0'):
+        return 'not a regular file'
+
+    size = parse_octal(header[124:136])
+    descriptor = os.open(dest_name, os.O_WRONLY | os.O_CREAT, 0o666)
+    with os.fdopen(descriptor, 'wb', buffering=0) as dest:
+        pc.copy_file(disk, disk_name, dest, dest_name, size)
+
+    # Skip forward in the disk up to the beginning of the next sector.
+    if size % pc.SECTOR_SIZE:
+        pc.read_fully(disk, disk_name, pc.SECTOR_SIZE - size % pc.SECTOR_SIZE)
+    return None
+
+
+def prepare_scratch_disk(opts: Options) -> None:
+    """Build the scratch partition holding the files for ``-p``."""
+    if not opts.gets and not opts.puts:
+        return
+
+    scratch = opts.parts.setdefault('scratch', pc.Partition())
+
+    # Create a temporary partition and write the files to put to it, then
+    # write an end-of-archive marker.
+    handle, part_name = make_temp_file('.part')
+    with handle:
+        for put in opts.puts:
+            put_scratch_file(put.name, put.other_name, handle, part_name)
+        pc.write_fully(handle, part_name, bytes(1024))
+
+        # Make sure the scratch disk is big enough to get big files and at
+        # least as big as any requested size.
+        size = pc.round_up(max(len(opts.gets) * 1024 * 1024, scratch.nbytes),
+                           pc.SECTOR_SIZE)
+        extend_file(handle, part_name, size)
+
+    if scratch.disk is not None:
+        # Copy the scratch partition into the existing disk.
+        if scratch.sectors * pc.SECTOR_SIZE < size:
+            raise pc.PintosError(
+                f'{scratch.disk}: scratch partition too small')
+        with open(part_name, 'rb', buffering=0) as source, \
+                open(scratch.disk, 'r+b', buffering=0) as disk:
+            disk.seek(scratch.start * pc.SECTOR_SIZE)
+            pc.copy_file(source, part_name, disk, scratch.disk, size)
+    else:
+        # Use the temporary file as the source of the scratch partition.
+        pc.set_partition(opts.parts, 'scratch', 'file', part_name)
+
+
+def finish_scratch_disk(opts: Options) -> None:
+    """Read the files for ``-g`` back from the scratch disk."""
+    if not opts.gets:
+        return
+
+    scratch = opts.parts['scratch']
+    assert scratch.disk is not None
+    disk_name = scratch.disk
+    part_end = (scratch.start + scratch.sectors) * pc.SECTOR_SIZE
+
     # If reading fails, delete that file and all subsequent files, but
-    # don't die with an error, because that's a guest error not a host
-    # error.  (If we do exit with an error code, it fouls up the
-    # grading process.)  Instead, just make sure that the host file(s)
-    # we were supposed to retrieve is unlinked.
-    my ($ok) = 1;
-    my ($part_end) = ($p->{START} + $p->{SECTORS}) * 512;
-    foreach my $get (@gets) {
-	my ($name) = defined ($get->[1]) ? $get->[1] : $get->[0];
-	if ($ok) {
-	    my ($error) = get_scratch_file ($name, $part_handle, $part_fn);
-	    if (!$error && sysseek ($part_handle, 0, SEEK_CUR) > $part_end) {
-		$error = "$part_fn: scratch data overflows partition";
-	    }
-	    if ($error) {
-		print STDERR "getting $name failed ($error)\n";
-		$ok = 0;
-	    }
-	}
-	die "$name: unlink: $!\n" if !$ok && !unlink ($name) && !$!{ENOENT};
-    }
-}
+    # don't die with an error, because that's a guest error, not a host
+    # error.  (An error exit would foul up the grading process.)
+    with open(disk_name, 'rb', buffering=0) as disk:
+        disk.seek(scratch.start * pc.SECTOR_SIZE)
+        ok = True
+        for get in opts.gets:
+            name = get.other_name
+            if ok:
+                error = get_scratch_file(name, disk, disk_name)
+                if error is None and disk.tell() > part_end:
+                    error = f'{disk_name}: scratch data overflows partition'
+                if error:
+                    print(f'getting {name} failed ({error})', file=sys.stderr)
+                    ok = False
+            if not ok:
+                try:
+                    os.unlink(name)
+                except FileNotFoundError:
+                    pass
 
-# mk_ustar_field($number, $size)
-#
-# Returns $number in a $size-byte numeric field in the format used by
-# the standard ustar archive header.
-sub mk_ustar_field {
-    my ($number, $size) = @_;
-    my ($len) = $size - 1;
-    my ($out) = sprintf ("%0${len}o", $number) . "\0";
-    die "$number: too large for $size-byte octal ustar field\n"
-      if length ($out) != $size;
-    return $out;
-}
 
-# calc_ustar_chksum($s)
-#
-# Calculates and returns the ustar checksum of 512-byte ustar archive
-# header $s.
-sub calc_ustar_chksum {
-    my ($s) = @_;
-    die if length ($s) != 512;
-    substr ($s, 148, 8, ' ' x 8);
-    return unpack ("%32a*", $s);
-}
+# --------------------------------------------------------------------------
+# Running subprocesses.
 
-# put_scratch_file($src_file_name, $dst_file_name,
-#                  $disk_handle, $disk_file_name).
-#
-# Copies $src_file_name into $disk_handle for extraction as
-# $dst_file_name.  $disk_file_name is used for error messages.
-sub put_scratch_file {
-    my ($src_file_name, $dst_file_name, $disk_handle, $disk_file_name) = @_;
+class _TimeLimit(Exception):
+    """Raised by the SIGALRM handler when the time limit is reached."""
 
-    print "Copying $src_file_name to scratch partition...\n";
 
-    # ustar format supports up to 100 characters for a file name, and
-    # even longer names given some common properties, but our code in
-    # the Pintos kernel only supports at most 99 characters.
-    die "$dst_file_name: name too long (max 99 characters)\n"
-      if length ($dst_file_name) > 99;
+class _Interrupted(Exception):
+    """Raised by the SIGINT and SIGTERM handler."""
 
-    # Compose and write ustar header.
-    stat $src_file_name or die "$src_file_name: stat: $!\n";
-    my ($size) = -s _;
-    my ($header) = (pack ("a100", $dst_file_name)	# name
-		    . mk_ustar_field (0644, 8)		# mode
-		    . mk_ustar_field (0, 8)		# uid
-		    . mk_ustar_field (0, 8)		# gid
-		    . mk_ustar_field ($size, 12)	# size
-		    . mk_ustar_field (1136102400, 12)	# mtime
-		    . (' ' x 8)				# chksum
-		    . '0'				# typeflag
-		    . ("\0" x 100)			# linkname
-		    . "ustar\0"				# magic
-		    . "00"				# version
-		    . "root" . ("\0" x 28)		# uname
-		    . "root" . ("\0" x 28)		# gname
-		    . "\0" x 8				# devmajor
-		    . "\0" x 8				# devminor
-		    . ("\0" x 155))			# prefix
-                    . "\0" x 12;			# pad to 512 bytes
-    substr ($header, 148, 8) = mk_ustar_field (calc_ustar_chksum ($header), 8);
-    write_fully ($disk_handle, $disk_file_name, $header);
+    def __init__(self, number: int) -> None:
+        """Remember which signal ``number`` arrived."""
+        super().__init__(number)
+        self.number = number
 
-    # Copy file data.
-    my ($put_handle);
-    sysopen ($put_handle, $src_file_name, O_RDONLY)
-      or die "$src_file_name: open: $!\n";
-    copy_file ($put_handle, $src_file_name, $disk_handle, $disk_file_name,
-	       $size);
-    die "$src_file_name: changed size while being read\n"
-      if $size != -s $put_handle;
-    close ($put_handle);
 
-    # Round up disk data to beginning of next sector.
-    write_fully ($disk_handle, $disk_file_name, "\0" x (512 - $size % 512))
-      if $size % 512;
-}
+def _raise_time_limit(_number: int, _frame: object) -> None:
+    raise _TimeLimit
 
-# get_scratch_file($get_file_name, $disk_handle, $disk_file_name)
-#
-# Copies from $disk_handle to $get_file_name (which is created).
-# $disk_file_name is used for error messages.
-# Returns 1 if successful, 0 on failure.
-sub get_scratch_file {
-    my ($get_file_name, $disk_handle, $disk_file_name) = @_;
 
-    print "Copying $get_file_name out of $disk_file_name...\n";
+def _raise_interrupted(number: int, _frame: object) -> None:
+    raise _Interrupted(number)
 
-    # Read ustar header sector.
-    my ($header) = read_fully ($disk_handle, $disk_file_name, 512);
-    return "scratch disk tar archive ends unexpectedly"
-      if $header eq ("\0" x 512);
 
-    # Verify magic numbers.
-    return "corrupt ustar signature" if substr ($header, 257, 6) ne "ustar\0";
-    return "invalid ustar version" if substr ($header, 263, 2) ne '00';
+class Supervisor:
+    """Runs a simulator, enforcing the timeout and relaying signals.
 
-    # Verify checksum.
-    my ($chksum) = oct (unpack ("Z*", substr ($header, 148, 8)));
-    my ($correct_chksum) = calc_ustar_chksum ($header);
-    return "checksum mismatch" if $chksum != $correct_chksum;
+    The signal handlers only raise exceptions, so the real work happens in
+    ``run`` and never inside a handler (a handler that waits for the
+    process would deadlock on ``Popen``'s own lock).
 
-    # Get type.
-    my ($typeflag) = substr ($header, 156, 1);
-    return "not a regular file" if $typeflag ne '0' && $typeflag ne "\0";
+    QEMU turns off local echo on the terminal and does not restore it if it
+    is killed by a signal, so the terminal settings are restored here.
+    """
 
-    # Get size.
-    my ($size) = oct (unpack ("Z*", substr ($header, 124, 12)));
-    return "bad size $size\n" if $size < 0;
+    def __init__(self, opts: Options, proc: 'subprocess.Popen[bytes]',
+                 terminal: Optional[list]) -> None:
+        """Supervise ``proc``; ``terminal`` is the termios state to restore."""
+        self.opts = opts
+        self.proc = proc
+        self.terminal = terminal
+        self.cause: Optional[str] = None   # Why a failed run is being killed.
 
-    # Copy file data.
-    my ($get_handle);
-    sysopen ($get_handle, $get_file_name, O_WRONLY | O_CREAT, 0666)
-      or die "$get_file_name: create: $!\n";
-    copy_file ($disk_handle, $disk_file_name, $get_handle, $get_file_name,
-	       $size);
-    close ($get_handle);
+    def run(self) -> int:
+        """Wait for the process; return its exit status.
 
-    # Skip forward in disk up to beginning of next sector.
-    read_fully ($disk_handle, $disk_file_name, 512 - $size % 512)
-      if $size % 512;
+        A negative status means the process died from that signal.  If the
+        time limit is reached the process is killed and this program exits.
+        """
+        handlers = {signal.SIGALRM: _raise_time_limit,
+                    signal.SIGINT: _raise_interrupted,
+                    signal.SIGTERM: _raise_interrupted}
+        saved = {number: signal.signal(number, handler)
+                 for number, handler in handlers.items()}
+        try:
+            try:
+                if self.opts.timeout is not None:
+                    signal.alarm(self.opts.timeout)
+                if self.opts.kill_on_failure:
+                    self._filter_output()
+                self.proc.wait()
+            finally:
+                signal.alarm(0)
+        except _TimeLimit:
+            self._time_limit_reached()
+        except _Interrupted as interrupt:
+            self._relay(interrupt.number)
+        finally:
+            for number, handler in saved.items():
+                signal.signal(number, handler)
+            self._restore_terminal()
+        return self.proc.returncode
 
-    return 0;
-}
-
-# Running simulators.
+    def _restore_terminal(self) -> None:
+        if self.terminal is not None:
+            termios.tcsetattr(0, termios.TCSANOW, self.terminal)
 
-# Runs the selected simulator.
-sub run_vm {
-    if ($sim eq 'bochs') {
-	run_bochs ();
-    } elsif ($sim eq 'qemu') {
-	run_qemu ();
-    } elsif ($sim eq 'player') {
-	run_player ();
-    } else {
-	die "unknown simulator `$sim'\n";
-    }
-}
+    def _relay(self, number: int) -> NoReturn:
+        """Relay a signal to the process, then die from it ourselves."""
+        self.proc.send_signal(number)
+        remove_temp_files()
+        self._restore_terminal()
+        signal.signal(number, signal.SIG_DFL)
+        os.kill(os.getpid(), number)
+        sys.exit(128 + number)      # Not reached: the signal kills us.
 
-# Runs Bochs.
-sub run_bochs {
-    # Select Bochs binary based on the chosen debugger.
-    my ($bin) = $debug eq 'monitor' ? 'bochs-dbg' : 'bochs';
+    def _time_limit_reached(self) -> NoReturn:
+        """Kill the process and exit: the time limit was reached."""
+        self.proc.kill()
+        print(f'sent kill to process {self.proc.pid}, '
+              'waiting for it to end')
+        self.proc.wait()
+        self._restore_terminal()
+        seek_to_end_of_stdout()
+        if self.cause is None:
+            load = ', '.join(f'{x:.2f}' for x in os.getloadavg())
+            elapsed = int(time.time() - self.opts.start_time)
+            print(f'\nTIMEOUT after {elapsed} seconds of wall-clock time'
+                  f' - load average: {load}')
+        else:
+            print(f'Simulation terminated due to {self.cause}.')
+        sys.stdout.flush()
+        sys.exit(0)
 
-    my ($squish_pty);
-    if ($serial) {
-	$squish_pty = find_in_path ("squish-pty");
-	print "warning: can't find squish-pty, so terminal input will fail\n"
-	  if !defined $squish_pty;
-    }
+    def _filter_output(self) -> None:
+        """Pass the process's output through, watching for failures."""
+        assert self.proc.stdout is not None
+        descriptor = self.proc.stdout.fileno()
+        pending = b''
+        boots = 0
+        while True:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                return
+            sys.stdout.flush()
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+            pending += chunk
+            while b'\n' in pending:
+                raw, _, pending = pending.partition(b'\n')
+                if self.cause is not None:
+                    continue
+                line = raw.decode('utf-8', 'replace')
+                found = re.search(r'(Kernel PANIC|User process ABORT)', line)
+                if found:
+                    self.cause = found.group(1).lower()
+                elif 'Pintos booting' in line:
+                    boots += 1
+                    if boots > 1:
+                        self.cause = 'triple fault'
+                elif 'FAILED' in line:
+                    self.cause = 'test failure'
+                if self.cause is not None:
+                    signal.alarm(FAILURE_GRACE_SECONDS)
 
-    # Write bochsrc.txt configuration file.
-    open (BOCHSRC, ">", "bochsrc.txt") or die "bochsrc.txt: create: $!\n";
-    print BOCHSRC <<EOF;
-romimage: file=\$BXSHARE/BIOS-bochs-latest
-vgaromimage: file=\$BXSHARE/VGABIOS-lgpl-latest
-boot: disk
-cpu: ips=1000000
-megs: $mem
-log: bochsout.txt
-panic: action=fatal
-# For older bochs:
-#user_shortcut: keys=ctrlaltdel
-# For more recent bochs:
-keyboard: user_shortcut=ctrl-alt-del
-EOF
-    print BOCHSRC "gdbstub: enabled=1, port=$gdb_port\n" if $debug eq 'gdb';
-    print BOCHSRC "clock: sync=", $realtime ? 'realtime' : 'none',
-      ", time0=0\n";
-    print BOCHSRC "ata1: enabled=1, ioaddr1=0x170, ioaddr2=0x370, irq=15\n"
-      if @disks > 2;
-    print_bochs_disk_line ("ata0-master", $disks[0]);
-    print_bochs_disk_line ("ata0-slave", $disks[1]);
-    print_bochs_disk_line ("ata1-master", $disks[2]);
-    print_bochs_disk_line ("ata1-slave", $disks[3]);
-    if ($vga ne 'terminal') {
-	if ($serial) {
-	    my $mode = defined ($squish_pty) ? "term" : "file";
-	    print BOCHSRC "com1: enabled=1, mode=$mode, dev=/dev/stdout\n";
-	}
-	print BOCHSRC "display_library: nogui\n" if $vga eq 'none';
-    } else {
-	print BOCHSRC "display_library: term\n";
-    }
-    close (BOCHSRC);
 
-    # Compose Bochs command line.
-    my (@cmd) = ($bin, '-q');
-    unshift (@cmd, $squish_pty) if defined $squish_pty;
-    push (@cmd, '-j', $jitter) if defined $jitter;
+def seek_to_end_of_stdout() -> None:
+    """Move standard output to the end of the file, if it is a file."""
+    sys.stdout.flush()
+    try:
+        os.lseek(1, 0, os.SEEK_END)
+    except OSError:
+        pass
 
-    # Run Bochs.
-    print join (' ', @cmd), "\n";
-    my ($exit) = xsystem (@cmd);
-    if (WIFEXITED ($exit)) {
-	# Bochs exited normally.
-	# Ignore the exit code; Bochs normally exits with status 1,
-	# which is weird.
-    } elsif (WIFSIGNALED ($exit)) {
-	die "Bochs died with signal ", WTERMSIG ($exit), "\n";
-    } else {
-	die "Bochs died: code $exit\n";
-    }
-}
 
-sub print_bochs_disk_line {
-    my ($device, $disk) = @_;
-    if (defined $disk) {
-	my (%geom) = disk_geometry ($disk);
-	print BOCHSRC "$device: type=disk, path=$disk, mode=flat, ";
-	print BOCHSRC "cylinders=$geom{C}, heads=$geom{H}, spt=$geom{S}, ";
-	print BOCHSRC "translation=none\n";
-    }
-}
+def run_subprocess(opts: Options, command: Sequence[str]) -> int:
+    """Run ``command`` under a ``Supervisor``; return its exit status."""
+    terminal = termios.tcgetattr(0) if os.isatty(0) else None
+    sys.stdout.flush()
+    try:
+        # A background process group gets stopped (SIGTTOU/SIGTTIN) when
+        # QEMU touches the terminal, so only split off if stdin is no tty.
+        proc = subprocess.Popen(
+            list(command),
+            stdout=subprocess.PIPE if opts.kill_on_failure else None,
+            preexec_fn=None if os.isatty(0) else os.setpgrp)
+    except OSError as error:
+        raise pc.PintosError(f'{command[0]}: {error.strerror}') from error
+    return Supervisor(opts, proc, terminal).run()
 
-# Runs QEMU.
-sub run_qemu {
-    print "warning: qemu doesn't support --terminal\n"
-      if $vga eq 'terminal';
-    print "warning: qemu doesn't support jitter\n"
-      if defined $jitter;
-    my (@cmd) = ($ENV{PINTOS_QEMU} || 'qemu-system-i386');
-    push (@cmd, '-device', 'isa-debug-exit');
 
-    my ($i);
-    for ($i = 0; $i < 4; $i++) {
-	if (defined $disks[$i]) {
-	    push (@cmd, '-drive');
-	    push (@cmd, "file=$disks[$i],format=raw,index=$i,media=disk");
-	}
-    }
-#    push (@cmd, '-hda', $disks[0]) if defined $disks[0];
-#    push (@cmd, '-hdb', $disks[1]) if defined $disks[1];
-#    push (@cmd, '-hdc', $disks[2]) if defined $disks[2];
-#    push (@cmd, '-hdd', $disks[3]) if defined $disks[3];
-    push (@cmd, '-m', $mem);
-    push (@cmd, '-net', 'none');
-    push (@cmd, '-nographic') if $vga eq 'none';
-    push (@cmd, '-serial', 'stdio') if $serial && $vga ne 'none';
-    push (@cmd, '-S') if $debug eq 'monitor';
-    push (@cmd, '-gdb', "tcp::$gdb_port", '-S') if $debug eq 'gdb';
-    push (@cmd, '-monitor', 'null') if $vga eq 'none' && $debug eq 'none';
-    run_command (@cmd);
-}
+def run_command(opts: Options, command: Sequence[str]) -> None:
+    """Print and run ``command``; fail unless it exited cleanly."""
+    print(' '.join(command))
+    status = run_subprocess(opts, command)
+    if status not in (0, QEMU_CLEAN_EXIT):
+        raise pc.PintosError('command failed')
 
-# player_unsup($flag)
-#
-# Prints a message that $flag is unsupported by VMware Player.
-sub player_unsup {
-    my ($flag) = @_;
-    print "warning: no support for $flag with VMware Player\n";
-}
 
-# Runs VMware Player.
-sub run_player {
-    player_unsup ("--$debug") if $debug ne 'none';
-    player_unsup ("--no-vga") if $vga eq 'none';
-    player_unsup ("--terminal") if $vga eq 'terminal';
-    player_unsup ("--jitter") if defined $jitter;
-    player_unsup ("--timeout"), undef $timeout if defined $timeout;
-    player_unsup ("--kill-on-failure"), undef $kill_on_failure
-      if defined $kill_on_failure;
+# --------------------------------------------------------------------------
+# Simulators.
 
-    $mem = round_up ($mem, 4);	# Memory must be multiple of 4 MB.
+def run_vm(opts: Options) -> None:
+    """Run the selected simulator."""
+    if opts.sim == 'bochs':
+        run_bochs(opts)
+    elif opts.sim == 'qemu':
+        run_qemu(opts)
+    elif opts.sim == 'player':
+        run_player(opts)
+    else:
+        raise pc.PintosError(f"unknown simulator `{opts.sim}'")
 
-    open (VMX, ">", "pintos.vmx") or die "pintos.vmx: create: $!\n";
-    chmod 0777 & ~umask, "pintos.vmx";
-    print VMX <<EOF;
-#! /usr/bin/vmware -G
-config.version = 8
-guestOS = "linux"
-memsize = $mem
-floppy0.present = FALSE
-usb.present = FALSE
-sound.present = FALSE
-gui.exitAtPowerOff = TRUE
-gui.exitOnCLIHLT = TRUE
-gui.powerOnAtStartUp = TRUE
-EOF
 
-    print VMX <<EOF if $serial;
-serial0.present = TRUE
-serial0.fileType = "pipe"
-serial0.fileName = "pintos.socket"
-serial0.pipe.endPoint = "client"
-serial0.tryNoRxLoss = "TRUE"
-EOF
+def qemu_video_args(command_list: list) -> None:
+    """
+    Specifies appropriate arguments to a qemu command list based on the platform of the host machine.
+    Author: Anish Gorakavi
+    """
+    match sys.platform:
+        case "darwin":
+            command_list += ["-display",  "cocoa,zoom-to-fit=on"]
+        case _:
+            raise pc.PintosError(
+                f"Unsupported Platform running Qemu. Specifically: {sys.platform}")
 
-    for (my ($i) = 0; $i < 4; $i++) {
-	my ($dsk) = $disks[$i];
-	last if !defined $dsk;
 
-	my ($device) = "ide" . int ($i / 2) . ":" . ($i % 2);
-	my ($pln) = "$device.pln";
-	print VMX <<EOF;
+def run_qemu(opts: Options) -> None:
+    """Run QEMU."""
+    if opts.vga == 'terminal':
+        print("warning: qemu doesn't support --terminal")
+    if opts.jitter is not None:
+        print("warning: qemu doesn't support jitter")
+    command = [os.environ.get('PINTOS_QEMU') or 'qemu-system-i386',
+               '-device', 'isa-debug-exit']
+    for index, disk in enumerate(opts.disks[:MAX_DISKS]):
+        command += ['-drive', f'file={disk},format=raw,index={index},'
+                    'media=disk']
+    command += ['-m', str(opts.mem), '-net', 'none']
+    qemu_video_args(command)  # Add appropriate video args per platform
+    if opts.vga == 'none':
+        command.append('-nographic')
+    if opts.serial and opts.vga != 'none':
+        command += ['-serial', 'stdio']
+    if opts.debug == 'monitor':
+        command.append('-S')
+    if opts.debug == 'gdb':
+        command += ['-gdb', f'tcp::{opts.gdb_port}', '-S']
+    if opts.vga == 'none' and opts.debug == 'none':
+        command += ['-monitor', 'null']
+    run_command(opts, command)
 
-$device.present = TRUE
-$device.deviceType = "plainDisk"
-$device.fileName = "$pln"
-EOF
 
-	open (URANDOM, '<', '/dev/urandom') or die "/dev/urandom: open: $!\n";
-	my ($bytes);
-	sysread (URANDOM, $bytes, 4) == 4 or die "/dev/urandom: read: $!\n";
-	close (URANDOM);
-	my ($cid) = unpack ("L", $bytes);
+def bochs_disk_line(device: str, disk: Optional[str]) -> str:
+    """Return the bochsrc line for ``disk`` on ``device``, if any."""
+    if disk is None:
+        return ''
+    geometry = disk_geometry(disk)
+    return (f'{device}: type=disk, path={disk}, mode=flat, '
+            f'cylinders={geometry.cylinders}, heads={geometry.heads}, '
+            f'spt={geometry.sectors}, translation=none\n')
 
-	my (%geom) = disk_geometry ($dsk);
-	open (PLN, ">", $pln) or die "$pln: create: $!\n";
-	print PLN <<EOF;
-version=1
-CID=$cid
-parentCID=ffffffff
-createType="monolithicFlat"
 
-RW $geom{CAPACITY} FLAT "$dsk" 0
+def find_in_path(program: str) -> Optional[str]:
+    """Return ``program`` if it is an executable found on ``$PATH``."""
+    return program if shutil.which(program) else None
 
-# The Disk Data Base
-#DDB
 
-ddb.adapterType = "ide"
-ddb.virtualHWVersion = "4"
-ddb.toolsVersion = "2"
-ddb.geometry.cylinders = "$geom{C}"
-ddb.geometry.heads = "$geom{H}"
-ddb.geometry.sectors = "$geom{S}"
-EOF
-	close (PLN);
-    }
-    close (VMX);
+def run_bochs(opts: Options) -> None:
+    """Run Bochs."""
+    # Select the Bochs binary based on the chosen debugger.
+    binary = 'bochs-dbg' if opts.debug == 'monitor' else 'bochs'
 
-    my ($squish_unix);
-    if ($serial) {
-	$squish_unix = find_in_path ("squish-unix");
-	print "warning: can't find squish-unix, so terminal input ",
-	  "and output will fail\n" if !defined $squish_unix;
-    }
+    squish_pty = None
+    if opts.serial:
+        squish_pty = find_in_path('squish-pty')
+        if squish_pty is None:
+            print("warning: can't find squish-pty, so terminal input "
+                  'will fail')
 
-    my ($vmx) = getcwd () . "/pintos.vmx";
-    my (@cmd) = ("vmplayer", $vmx);
-    unshift (@cmd, $squish_unix, "pintos.socket") if $squish_unix;
-    print join (' ', @cmd), "\n";
-    xsystem (@cmd);
-}
-
-# Disk utilities.
+    # Write the bochsrc.txt configuration file.
+    disks: List[Optional[str]] = list(opts.disks[:MAX_DISKS])
+    disks += [None] * (MAX_DISKS - len(disks))
+    lines = [
+        'romimage: file=$BXSHARE/BIOS-bochs-latest\n',
+        'vgaromimage: file=$BXSHARE/VGABIOS-lgpl-latest\n',
+        'boot: disk\n',
+        'cpu: ips=1000000\n',
+        f'megs: {opts.mem}\n',
+        'log: bochsout.txt\n',
+        'panic: action=fatal\n',
+        '# For older bochs:\n',
+        '#user_shortcut: keys=ctrlaltdel\n',
+        '# For more recent bochs:\n',
+        'keyboard: user_shortcut=ctrl-alt-del\n',
+    ]
+    if opts.debug == 'gdb':
+        lines.append(f'gdbstub: enabled=1, port={opts.gdb_port}\n')
+    clock = 'realtime' if opts.realtime else 'none'
+    lines.append(f'clock: sync={clock}, time0=0\n')
+    if len(opts.disks) > 2:
+        lines.append('ata1: enabled=1, ioaddr1=0x170, ioaddr2=0x370, '
+                     'irq=15\n')
+    for device, disk in zip(('ata0-master', 'ata0-slave', 'ata1-master',
+                             'ata1-slave'), disks):
+        lines.append(bochs_disk_line(device, disk))
+    if opts.vga != 'terminal':
+        if opts.serial:
+            mode = 'term' if squish_pty is not None else 'file'
+            lines.append(f'com1: enabled=1, mode={mode}, dev=/dev/stdout\n')
+        if opts.vga == 'none':
+            lines.append('display_library: nogui\n')
+    else:
+        lines.append('display_library: term\n')
+    with open('bochsrc.txt', 'w') as bochsrc:
+        bochsrc.writelines(lines)
 
-sub extend_file {
-    my ($handle, $file_name, $size) = @_;
-    if (-s ($handle) < $size) {
-	sysseek ($handle, $size - 1, 0) == $size - 1
-	  or die "$file_name: seek: $!\n";
-	syswrite ($handle, "\0") == 1
-	  or die "$file_name: write: $!\n";
-    }
-}
+    # Compose the Bochs command line.
+    command = [binary, '-q']
+    if squish_pty is not None:
+        command.insert(0, squish_pty)
+    if opts.jitter is not None:
+        command += ['-j', str(opts.jitter)]
 
-# disk_geometry($file)
-#
-# Examines $file and returns a valid IDE disk geometry for it, as a
-# hash.
-sub disk_geometry {
-    my ($file) = @_;
-    my ($size) = -s $file;
-    die "$file: stat: $!\n" if !defined $size;
-    die "$file: size $size not a multiple of 512 bytes\n" if $size % 512;
-    my ($cyl_size) = 512 * 16 * 63;
-    my ($cylinders) = ceil ($size / $cyl_size);
+    # Run Bochs.  Its exit code is ignored: it normally exits with status
+    # 1, which is weird.
+    print(' '.join(command))
+    status = run_subprocess(opts, command)
+    if status < 0:
+        raise pc.PintosError(f'Bochs died with signal {-status}')
 
-    return (CAPACITY => $size / 512,
-	    C => $cylinders,
-	    H => 16,
-	    S => 63);
-}
-
-# Subprocess utilities.
 
-# run_command(@args)
-#
-# Runs xsystem(@args).
-# Also prints the command it's running and checks that it succeeded.
-sub run_command {
-    print join (' ', @_), "\n";
-    die "command failed\n" if xsystem (@_);
-}
+def run_player(opts: Options) -> None:
+    """Run VMware Player."""
+    def unsupported(flag: str) -> None:
+        print(f'warning: no support for {flag} with VMware Player')
 
-# xsystem(@args)
-#
-# Creates a subprocess via exec(@args) and waits for it to complete.
-# Relays common signals to the subprocess.
-# If $timeout is set then the subprocess will be killed after that long.
-sub xsystem {
-    # QEMU turns off local echo and does not restore it if killed by a signal.
-    # We compensate by restoring it ourselves.
-    my $cleanup = sub {};
-    if (isatty (0)) {
-	my $termios = POSIX::Termios->new;
-	$termios->getattr (0);
-	$cleanup = sub { $termios->setattr (0, &POSIX::TCSANOW); }
-    }
+    if opts.debug != 'none':
+        unsupported(f'--{opts.debug}')
+    if opts.vga == 'none':
+        unsupported('--no-vga')
+    if opts.vga == 'terminal':
+        unsupported('--terminal')
+    if opts.jitter is not None:
+        unsupported('--jitter')
+    if opts.timeout is not None:
+        unsupported('--timeout')
+        opts.timeout = None
+    if opts.kill_on_failure:
+        unsupported('--kill-on-failure')
+        opts.kill_on_failure = False
 
-    # Create pipe for filtering output.
-    pipe (my $in, my $out) or die "pipe: $!\n" if $kill_on_failure;
+    memory = pc.round_up(opts.mem, 4)    # Must be a multiple of 4 MB.
 
-    my ($pid) = fork;
-    if (!defined ($pid)) {
-	# Fork failed.
-	die "fork: $!\n";
-    } elsif (!$pid) {
-	# Running in child process.
-	dup2 (fileno ($out), STDOUT_FILENO) or die "dup2: $!\n"
-	  if $kill_on_failure;
-        # A background process group gets stopped (SIGTTOU/SIGTTIN) when QEMU touches the tty.
-        setpgrp(0,0) unless isatty (0);
-	exec_setitimer (@_);
-    } else {
-	# Running in parent process.
-	close $out if $kill_on_failure;
+    vmx = [
+        '#! /usr/bin/vmware -G\n',
+        'config.version = 8\n',
+        'guestOS = "linux"\n',
+        f'memsize = {memory}\n',
+        'floppy0.present = FALSE\n',
+        'usb.present = FALSE\n',
+        'sound.present = FALSE\n',
+        'gui.exitAtPowerOff = TRUE\n',
+        'gui.exitOnCLIHLT = TRUE\n',
+        'gui.powerOnAtStartUp = TRUE\n',
+    ]
+    if opts.serial:
+        vmx += [
+            'serial0.present = TRUE\n',
+            'serial0.fileType = "pipe"\n',
+            'serial0.fileName = "pintos.socket"\n',
+            'serial0.pipe.endPoint = "client"\n',
+            'serial0.tryNoRxLoss = "TRUE"\n',
+        ]
 
-	my ($cause);
-	local $SIG{ALRM} = sub { timeout ($pid, $cause, $cleanup); };
-	local $SIG{INT} = sub { relay_signal ($pid, "INT", $cleanup); };
-	local $SIG{TERM} = sub { relay_signal ($pid, "TERM", $cleanup); };
+    for index, disk in enumerate(opts.disks[:MAX_DISKS]):
+        device = f'ide{index // 2}:{index % 2}'
+        plain = f'{device}.pln'
+        vmx += [
+            '\n',
+            f'{device}.present = TRUE\n',
+            f'{device}.deviceType = "plainDisk"\n',
+            f'{device}.fileName = "{plain}"\n',
+        ]
+        cid = struct.unpack('=I', os.urandom(4))[0]
+        geometry = disk_geometry(disk)
+        with open(plain, 'w') as descriptor:
+            descriptor.write(
+                'version=1\n'
+                f'CID={cid}\n'
+                'parentCID=ffffffff\n'
+                'createType="monolithicFlat"\n'
+                '\n'
+                f'RW {geometry.capacity} FLAT "{disk}" 0\n'
+                '\n'
+                '# The Disk Data Base\n'
+                '#DDB\n'
+                '\n'
+                'ddb.adapterType = "ide"\n'
+                'ddb.virtualHWVersion = "4"\n'
+                'ddb.toolsVersion = "2"\n'
+                f'ddb.geometry.cylinders = "{geometry.cylinders}"\n'
+                f'ddb.geometry.heads = "{geometry.heads}"\n'
+                f'ddb.geometry.sectors = "{geometry.sectors}"\n')
+    with open('pintos.vmx', 'w') as config:
+        config.writelines(vmx)
+    umask = os.umask(0)
+    os.umask(umask)
+    os.chmod('pintos.vmx', 0o777 & ~umask)
 
-    # Timeout computation changed from original script to allow multiprocess
-    # testing. See git commit log for details. --- 2022-12-12 K. Song
-	alarm ($timeout) if defined ($timeout);
+    squish_unix = None
+    if opts.serial:
+        squish_unix = find_in_path('squish-unix')
+        if squish_unix is None:
+            print("warning: can't find squish-unix, so terminal input "
+                  'and output will fail')
 
-	if ($kill_on_failure) {
-	    # Filter output.
-	    my ($buf) = "";
-	    my ($boots) = 0;
-	    local ($|) = 1;
-	    for (;;) {
-		if (waitpid ($pid, WNOHANG) != 0) {
-		    # Subprocess died.  Pass through any remaining data.
-		    do { print $buf } while sysread ($in, $buf, 4096) > 0;
-		    last;
-		}
+    command = ['vmplayer', os.path.join(os.getcwd(), 'pintos.vmx')]
+    if squish_unix:
+        command = [squish_unix, 'pintos.socket'] + command
+    print(' '.join(command))
+    run_subprocess(opts, command)
 
-		# Read and print out pipe data.
-		my ($len) = length ($buf);
-		my ($n_read) = sysread ($in, $buf, 4096, $len);
-		waitpid ($pid, 0), last if !defined ($n_read) || $n_read <= 0;
-		print substr ($buf, $len);
 
-		# Remove full lines from $buf and scan them for keywords.
-		while ((my $idx = index ($buf, "\n")) >= 0) {
-		    local $_ = substr ($buf, 0, $idx + 1, '');
-		    next if defined ($cause);
-		    if (/(Kernel PANIC|User process ABORT)/ ) {
-			$cause = "\L$1\E";
-			alarm (5);
-		    } elsif (/Pintos booting/ && ++$boots > 1) {
-			$cause = "triple fault";
-			alarm (5);
-		    } elsif (/FAILED/) {
-			$cause = "test failure";
-			alarm (5);
-		    }
-		}
-	    }
-	} else {
-	    waitpid ($pid, 0);
-	}
-	alarm (0);
-	&$cleanup ();
+def main(argv: List[str]) -> int:
+    """Run pintos; return the exit status."""
+    opts = parse_command_line(argv)
+    prepare_scratch_disk(opts)
+    find_disks(opts)
+    run_vm(opts)
+    finish_scratch_disk(opts)
+    return 0
 
-	if (WIFSIGNALED ($?) && WTERMSIG ($?) == SIGVTALRM_number ()) {
-	    seek (STDOUT, 0, 2);
-	    print "\nTIMEOUT after $timeout seconds of host CPU time\n";
-	    exit 0;
-	}
 
-        # Kind of a gross hack, because qemu's isa-debug-exit device
-        # only allows odd-numbered exit values, so we can't exit
-        # cleanly with 0.  We use exit status 0x63 as an alternate
-        # "clean" exit status.
-	return ($? != 0x6300) && $?;
-    }
-}
-
-# relay_signal($pid, $signal, &$cleanup)
-#
-# Relays $signal to $pid and then reinvokes it for us with the default
-# handler.  Also cleans up temporary files and invokes $cleanup.
-sub relay_signal {
-    my ($pid, $signal, $cleanup) = @_;
-    kill $signal, $pid;
-    eval { File::Temp::cleanup() };	# Not defined in old File::Temp.
-    &$cleanup ();
-    $SIG{$signal} = 'DEFAULT';
-    kill $signal, getpid ();
-}
-
-# timeout($pid, $cause, &$cleanup)
-#
-# Interrupts $pid and dies with a timeout error message,
-# after invoking $cleanup.
-sub timeout {
-    my ($pid, $cause, $cleanup) = @_;
-    kill "KILL", $pid;
-    print "sent kill to process $pid, waiting for it to end\n";
-    waitpid ($pid, 0);
-    &$cleanup ();
-    seek (STDOUT, 0, 2);
-    if (!defined ($cause)) {
-	my ($load_avg) = `uptime` =~ /(load average:.*)$/i;
-	print "\nTIMEOUT after ", time () - $start_time,
-	  " seconds of wall-clock time";
-	print  " - $load_avg" if defined $load_avg;
-	print "\n";
-    } else {
-	print "Simulation terminated due to $cause.\n";
-    }
-    exit 0;
-}
-
-# Calls setitimer to set a timeout, then execs what was passed to us.
-sub exec_setitimer {
-    #don't time out here, let CPU time be your guide ans 201401311717
-#   if (defined $timeout) {
-#	if ($^V ge 5.8.0) {
-#	    eval "
-#              use Time::HiRes qw(setitimer ITIMER_VIRTUAL);
-#              setitimer (ITIMER_VIRTUAL, $timeout, 0);
-#            ";
-#             #print "using setitimer to timeout after $timeout\n";
-#	} else {
-#	    { exec ("setitimer-helper", $timeout, @_); };
-#	    exit 1 if !$!{ENOENT};
-#	    print STDERR "warning: setitimer-helper is not installed, so ",
-#	      "CPU time limit will not be enforced\n";
-#	}
-#    }
-    exec (@_);
-    exit (1);
-}
-
-sub SIGVTALRM_number {
-    use Config;
-    my $i = 0;
-    foreach my $name (split(' ', $Config{sig_name})) {
-	return $i if $name eq 'VTALRM';
-	$i++;
-    }
-    return 0;
-}
-
-# find_in_path ($program)
-#
-# Searches for $program in $ENV{PATH}.
-# Returns $program if found, otherwise undef.
-sub find_in_path {
-    my ($program) = @_;
-    -x "$_/$program" and return $program foreach split (':', $ENV{PATH});
-    return;
-}
+if __name__ == '__main__':
+    pc.run_tool(main)

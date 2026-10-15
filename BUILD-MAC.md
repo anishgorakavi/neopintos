@@ -79,7 +79,7 @@ brew install i386-elf-gdb     # untested here
 pintos-gdb kernel.o           # then: target remote localhost:1234
 ```
 Backtraces from a panic: `backtrace kernel.o 0xADDR ...` (needs `utils/backtrace`;
-it uses the Perl script, no extra install).
+it uses the Python script in `utils/`, no extra install).
 
 ## Troubleshooting
 

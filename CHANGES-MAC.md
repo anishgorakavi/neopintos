@@ -14,6 +14,12 @@ Only build/tooling files were touched. No kernel, library or test source
 | `utils/pintos-gdb` | `GDBMACROS` points to `misc/gdb-macros` in this repo | Original path was a hardcoded university server path |
 | `utils/Makefile` | `all:` builds `setitimer-helper` only | `squish-pty.c`/`squish-unix.c` need `stropts.h`, absent on macOS (only needed for Bochs terminal / serial piping) |
 
+## Rewritten in Python 3
+
+`utils/pintos`, `utils/backtrace`, `utils/pintos-mkdisk` and `utils/pintos-set-cmdline` are now Python 3, and
+`utils/Pintos.pm` became `utils/pintos_common.py`. All the macOS changes in the table above were carried over.
+The Perl versions (as they were after the macOS changes) are in `old_pintos_scripts/`.
+
 ## Added files
 
 - `Make.tools` — plain list of tool definitions (CC, LD, OBJCOPY, AR, RANLIB, SIMULATOR, PINTOS_QEMU); edit it to change tools.

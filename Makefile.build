@@ -2,7 +2,7 @@
 
 # WARNING: Only edit me in the src/ directory!  (not in build/!)
 #CONSTANTS to edit
-PANIC_ON_INTERRUPT := 1
+PANIC_ON_INTERRUPT := 0
 
 
 

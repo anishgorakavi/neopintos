@@ -30,7 +30,7 @@ Run commands from the repo root after `source env.sh`. Add the `source` line to
 | `devices/`, `lib/` | Device drivers and the kernel/user C library |
 | `tests/` | Test suites and the grading scripts for each project |
 | `examples/` | Sample user programs (`cat`, `ls`, `shell`, ...) |
-| `utils/` | `pintos` launcher, `pintos-gdb`, `backtrace`, disk helpers |
+| `utils/` | `pintos` launcher, `pintos-gdb`, `backtrace`, disk helpers (Python 3; the Perl originals are in `old_pintos_scripts/`) |
 | `misc/` | Bochs patches/build scripts, GDB macros, GCC cross-compiler notes |
 | `Make.tools` | Toolchain definition (see below) |
 
@@ -84,6 +84,7 @@ was modified. Full details are in **[CHANGES-MAC.md](CHANGES-MAC.md)**.
   - Opens a QEMU window on macOS, which has no `$DISPLAY`.
   - Skips `setpgrp(0,0)` when stdin is a tty, so macOS no longer freezes QEMU on tty access.
   - Reads the QEMU binary from `$PINTOS_QEMU`.
+- `utils/pintos`, `backtrace`, `pintos-mkdisk`, `pintos-set-cmdline`: rewritten in Python 3 (PEP 8, type-hinted), with `Pintos.pm` replaced by `utils/pintos_common.py`. Command lines and disk images are unchanged. The original Perl scripts, including the macOS edits above, are kept in `old_pintos_scripts/`. Python 3.8+ is intended (only tested with 3.14); Perl is still needed by the test checkers in `tests/`. See [Python host tools](#python-host-tools).
 - `utils/pintos-gdb`: `GDBMACROS` points at `misc/gdb-macros` in this repo instead of a hardcoded university server path.
 - `utils/Makefile`: builds only `setitimer-helper`, because `squish-pty`/`squish-unix` need `stropts.h`, which macOS lacks. They only matter for the Bochs terminal and serial piping.
 
@@ -100,6 +101,19 @@ was modified. Full details are in **[CHANGES-MAC.md](CHANGES-MAC.md)**.
 1. Port build tooling to macOS with `i686-elf-gcc` and QEMU.
 2. Add `Make.tools` as the central toolchain definition (with per-OS detection).
 3. Simplify `Make.tools` to a plain list of assignments; the developer edits it directly.
+
+## Python host tools
+
+The scripts in `utils/` are Python 3 and need nothing beyond the standard library (written for 3.10 or newer, but only tested with 3.14).
+They are executable files without a `.py` suffix, so every Makefile and command line that runs `pintos`,
+`pintos-mkdisk`, `pintos-set-cmdline` or `backtrace` works as before. `utils/pintos_common.py` holds the shared
+disk and partition code (it replaces `Pintos.pm`).
+
+- `backtrace` looks for `i386-elf-addr2line`, then `i686-elf-addr2line` (what the macOS cross toolchain installs), then `addr2line`.
+- Fixed Perl bugs: `--kernel=FILE`, `--filesys=FILE` and `--swap=FILE` died with no message; `--geometry` was ignored;
+  `pintos-mkdisk` without `--format` never added the loader. `-k`/`--kill-on-failure` is still switched off after option
+  parsing, exactly as in the Perl original.
+- The Perl originals are in `old_pintos_scripts/` and still run (`perl old_pintos_scripts/pintos ...`); they are not on `PATH`.
 
 ## Rust components (work in progress)
 

@@ -1,42 +1,46 @@
-#! /usr/bin/perl -w
+#!/usr/bin/env python3
+"""pintos-set-cmdline: change the kernel command line stored in a disk."""
 
-use strict;
-use Fcntl 'SEEK_SET';
+from __future__ import annotations
 
-# Read Pintos.pm from the same directory as this program.
-BEGIN { my $self = $0; $self =~ s%/+[^/]*$%%; require "$self/Pintos.pm"; }
+import struct
+import sys
+from typing import List
 
-# Get command-line arguments.
-usage (0) if @ARGV == 1 && $ARGV[0] eq '--help';
-usage (1) if @ARGV < 2 || $ARGV[1] ne '--';
-my ($disk, undef, @kernel_args) = @ARGV;
+import pintos_common as pc
 
-# Open disk.
-my ($handle);
-open ($handle, '+<', $disk) or die "$disk: open: $!\n";
-
-# Check that it's a partitioned disk with a Pintos loader.
-my ($buffer) = read_fully ($handle, $disk, 512);
-unpack ("x510 v", $buffer) == 0xaa55 or die "$disk: not a partitioned disk\n";
-$buffer =~ /Pintos/ or die "$disk: does not contain Pintos loader\n";
-
-# Write the command line.
-our ($LOADER_SIZE);
-sysseek ($handle, $LOADER_SIZE, SEEK_SET) == $LOADER_SIZE
-  or die "$disk: seek: $!\n";
-write_fully ($handle, $disk, make_kernel_command_line (@kernel_args));
-
-# Close disk.
-close ($handle) or die "$disk: close: $!\n";
-
-exit 0;
-
-sub usage {
-    print <<'EOF';
+USAGE = """\
 pintos-set-cmdline, a utility for changing the command line in Pintos disks
 Usage: pintos-set-cmdline DISK -- [ARGUMENT...]
 where DISK is a bootable disk containing a Pintos loader
   and each ARGUMENT is inserted into the command line written to DISK.
-EOF
-    exit ($_[0]);
-}
+"""
+
+
+def main(argv: List[str]) -> int:
+    """Run pintos-set-cmdline; return the exit status."""
+    if argv == ['--help']:
+        print(USAGE, end='')
+        return 0
+    if len(argv) < 2 or argv[1] != '--':
+        print(USAGE, end='', file=sys.stderr)
+        return 1
+    disk, kernel_args = argv[0], argv[2:]
+
+    with open(disk, 'r+b', buffering=0) as handle:
+        # Check that it's a partitioned disk with a Pintos loader.
+        mbr = pc.read_fully(handle, disk, pc.SECTOR_SIZE)
+        if struct.unpack_from('<H', mbr, 510)[0] != pc.MBR_SIGNATURE:
+            raise pc.PintosError(f'{disk}: not a partitioned disk')
+        if b'Pintos' not in mbr:
+            raise pc.PintosError(f'{disk}: does not contain Pintos loader')
+
+        # Write the command line.
+        handle.seek(pc.LOADER_SIZE)
+        pc.write_fully(handle, disk,
+                       pc.make_kernel_command_line(kernel_args))
+    return 0
+
+
+if __name__ == '__main__':
+    pc.run_tool(main)

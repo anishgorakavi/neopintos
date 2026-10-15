@@ -1,10 +1,17 @@
-#! /usr/bin/perl -w
+#!/usr/bin/env python3
+"""backtrace: convert raw addresses into symbolic backtraces."""
 
-use strict;
+from __future__ import annotations
 
-# Check command line.
-if (grep ($_ eq '-h' || $_ eq '--help', @ARGV)) {
-    print <<'EOF';
+import os
+import re
+import shutil
+import subprocess
+from typing import Dict, List, Optional
+
+import pintos_common as pc
+
+USAGE = """\
 backtrace, for converting raw addresses into symbolic backtraces
 usage: backtrace [BINARY]... ADDRESS...
 where BINARY is the binary file or files from which to obtain symbols
@@ -17,90 +24,117 @@ symbol printed is from the first binary that contains a match.
 The ADDRESS list should be taken from the "Call stack:" printed by the
 kernel.  Read "Backtraces" in the "Debugging Tools" chapter of the
 Pintos documentation for more information.
-EOF
-    exit 0;
-}
-die "backtrace: at least one argument required (use --help for help)\n"
-    if @ARGV == 0;
+"""
 
-# Drop garbage inserted by kernel.
-@ARGV = grep (!/^(call|stack:?|[-+])$/i, @ARGV);
-s/\.$// foreach @ARGV;
+# Words the kernel prints around the addresses in a "Call stack:" line.
+GARBAGE = re.compile(r'(call|stack:?|[-+])', re.IGNORECASE)
 
-# Find binaries.
-my (@binaries);
-while ($ARGV[0] !~ /^0x/) {
-    my ($bin) = shift @ARGV;
-    die "backtrace: $bin: not found (use --help for help)\n" if ! -e $bin;
-    push (@binaries, $bin);
-}
-if (!@binaries) {
-    my ($bin);
-    if (-e 'kernel.o') {
-	$bin = 'kernel.o';
-    } elsif (-e 'build/kernel.o') {
-	$bin = 'build/kernel.o';
-    } else {
-	die "backtrace: no binary specified and neither \"kernel.o\" nor \"build/kernel.o\" exists (use --help for help)\n";
-    }
-    push (@binaries, $bin);
-}
+# Candidate addr2line programs, in order of preference.  The i686 name is
+# what the macOS cross toolchain installs.
+ADDR2LINE_NAMES = ('i386-elf-addr2line', 'i686-elf-addr2line', 'addr2line')
 
-# Find addr2line.
-my ($a2l) = search_path ("i386-elf-addr2line") || search_path ("addr2line");
-if (!$a2l) {
-    die "backtrace: neither `i386-elf-addr2line' nor `addr2line' in PATH\n";
-}
-sub search_path {
-    my ($target) = @_;
-    for my $dir (split (':', $ENV{PATH})) {
-	my ($file) = "$dir/$target";
-	return $file if -e $file;
-    }
-    return undef;
-}
 
-# Figure out backtrace.
-my (@locs) = map ({ADDR => $_}, @ARGV);
-for my $bin (@binaries) {
-    open (A2L, "$a2l -fe $bin " . join (' ', map ($_->{ADDR}, @locs)) . "|");
-    for (my ($i) = 0; <A2L>; $i++) {
-	my ($function, $line);
-	chomp ($function = $_);
-	chomp ($line = <A2L>);
-	next if defined $locs[$i]{BINARY};
+def find_binaries(args: List[str]) -> List[str]:
+    """Remove the leading binary names from ``args`` and return them.
 
-	if ($function ne '??' || $line ne '??:0') {
-	    $locs[$i]{FUNCTION} = $function;
-	    $locs[$i]{LINE} = $line;
-	    $locs[$i]{BINARY} = $bin;
-	}
-    }
-    close (A2L);
-}
+    If there are none, the default kernel binary is returned.
+    """
+    binaries: List[str] = []
+    while args and not args[0].startswith('0x'):
+        binary = args.pop(0)
+        if not os.path.exists(binary):
+            raise pc.PintosError(
+                f'backtrace: {binary}: not found (use --help for help)')
+        binaries.append(binary)
+    if not binaries:
+        for default in ('kernel.o', os.path.join('build', 'kernel.o')):
+            if os.path.exists(default):
+                return [default]
+        raise pc.PintosError(
+            'backtrace: no binary specified and neither "kernel.o" nor '
+            '"build/kernel.o" exists (use --help for help)')
+    return binaries
 
-# Print backtrace.
-my ($cur_binary);
-for my $loc (@locs) {
-    if (defined ($loc->{BINARY})
-	&& @binaries > 1
-	&& (!defined ($cur_binary) || $loc->{BINARY} ne $cur_binary)) {
-	$cur_binary = $loc->{BINARY};
-	print "In $cur_binary:\n";
-    }
 
-    my ($addr) = $loc->{ADDR};
-    $addr = sprintf ("0x%08x", hex ($addr)) if $addr =~ /^0x[0-9a-f]+$/i;
+def find_addr2line() -> str:
+    """Return the path of an ``addr2line`` program, or fail."""
+    for name in ADDR2LINE_NAMES:
+        path = shutil.which(name)
+        if path:
+            return path
+    raise pc.PintosError(
+        "backtrace: neither `i386-elf-addr2line' nor `addr2line' in PATH")
 
-    print $addr, ": ";
-    if (defined ($loc->{BINARY})) {
-	my ($function) = $loc->{FUNCTION};
-	my ($line) = $loc->{LINE};
-	$line =~ s/^(\.\.\/)*//;
-	$line = "..." . substr ($line, -25) if length ($line) > 28;
-	print "$function ($line)";
-    } else {
-	print "(unknown)";
-    }
-    print "\n";
-}
+
+def lookup(addr2line: str, binary: str, addresses: List[str]
+           ) -> List[Optional[Dict[str, str]]]:
+    """Ask ``addr2line`` about ``addresses`` in ``binary``.
+
+    Returns, for each address, its function and source line, or ``None``
+    if the binary does not know the address.
+    """
+    result = subprocess.run([addr2line, '-fe', binary, *addresses],
+                            stdout=subprocess.PIPE, universal_newlines=True,
+                            check=False)
+    lines = result.stdout.splitlines()
+    found: List[Optional[Dict[str, str]]] = []
+    for index in range(len(addresses)):
+        function = lines[2 * index] if 2 * index < len(lines) else '??'
+        where = lines[2 * index + 1] if 2 * index + 1 < len(lines) else '??:0'
+        if function != '??' or where != '??:0':
+            found.append({'function': function, 'line': where})
+        else:
+            found.append(None)
+    return found
+
+
+def format_location(function: str, line: str) -> str:
+    """Return ``function (file:line)`` with the file name shortened."""
+    line = re.sub(r'^(\.\./)*', '', line)
+    if len(line) > 28:
+        line = '...' + line[-25:]
+    return f'{function} ({line})'
+
+
+def main(argv: List[str]) -> int:
+    """Run backtrace; return the exit status."""
+    if '-h' in argv or '--help' in argv:
+        print(USAGE, end='')
+        return 0
+    if not argv:
+        raise pc.PintosError(
+            'backtrace: at least one argument required (use --help for help)')
+
+    # Drop garbage inserted by the kernel.
+    args = [arg for arg in argv if not GARBAGE.fullmatch(arg)]
+    args = [arg[:-1] if arg.endswith('.') else arg for arg in args]
+
+    binaries = find_binaries(args)
+    addr2line = find_addr2line()
+
+    # The first binary that recognises an address supplies its symbol.
+    symbols: List[Optional[Dict[str, str]]] = [None] * len(args)
+    owners: List[Optional[str]] = [None] * len(args)
+    for binary in binaries:
+        for index, symbol in enumerate(lookup(addr2line, binary, args)):
+            if owners[index] is None and symbol is not None:
+                symbols[index] = symbol
+                owners[index] = binary
+
+    current: Optional[str] = None
+    for address, symbol, owner in zip(args, symbols, owners):
+        if owner is not None and len(binaries) > 1 and owner != current:
+            current = owner
+            print(f'In {current}:')
+        if re.fullmatch(r'0x[0-9a-f]+', address, re.IGNORECASE):
+            address = f'0x{int(address, 16):08x}'
+        if symbol is not None:
+            description = format_location(symbol['function'], symbol['line'])
+        else:
+            description = '(unknown)'
+        print(f'{address}: {description}')
+    return 0
+
+
+if __name__ == '__main__':
+    pc.run_tool(main)

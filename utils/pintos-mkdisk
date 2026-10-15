@@ -1,107 +1,16 @@
-#! /usr/bin/perl
+#!/usr/bin/env python3
+"""pintos-mkdisk: create Pintos virtual disks."""
 
-use strict;
-use warnings;
-use POSIX;
-use Getopt::Long qw(:config bundling);
-use Fcntl 'SEEK_SET';
+from __future__ import annotations
 
-# Read Pintos.pm from the same directory as this program.
-BEGIN { my $self = $0; $self =~ s%/+[^/]*$%%; require "$self/Pintos.pm"; }
+import argparse
+import os
+import sys
+from typing import Dict, List, Optional
 
-our ($disk_fn);			# Output disk file name.
-our (%parts);			# Partitions.
-our ($format);			# "partitioned" (default) or "raw"
-our (%geometry);		# IDE disk geometry.
-our ($align);			# Align partitions on cylinders?
-our ($loader_fn);		# File name of loader.
-our ($include_loader);		# Include loader?
-our (@kernel_args);		# Kernel arguments.
+import pintos_common as pc
 
-if (grep ($_ eq '--', @ARGV)) {
-    @kernel_args = @ARGV;
-    @ARGV = ();
-    while ((my $arg = shift (@kernel_args)) ne '--') {
-	push (@ARGV, $arg);
-    }
-}
-
-GetOptions ("h|help" => sub { usage (0); },
-
-	    "kernel=s" => \&set_part,
-	    "filesys=s" => \&set_part,
-	    "scratch=s" => \&set_part,
-	    "swap=s" => \&set_part,
-
-	    "filesys-size=s" => \&set_part,
-	    "scratch-size=s" => \&set_part,
-	    "swap-size=s" => \&set_part,
-
-	    "kernel-from=s" => \&set_part,
-	    "filesys-from=s" => \&set_part,
-	    "scratch-from=s" => \&set_part,
-	    "swap-from=s" => \&set_part,
-
-	    "format=s" => \$format,
-	    "loader:s" => \&set_loader,
-	    "no-loader" => \&set_no_loader,
-	    "geometry=s" => \&set_geometry,
-	    "align=s" => \&set_align)
-  or exit 1;
-usage (1) if @ARGV != 1;
-
-$disk_fn = $ARGV[0];
-die "$disk_fn: already exists\n" if -e $disk_fn;
-
-# Sets the loader to copy to the MBR.
-sub set_loader {
-    die "can't specify both --loader and --no-loader\n"
-      if defined ($include_loader) && !$include_loader;
-    $include_loader = 1;
-    $loader_fn = $_[1] if $_[1] ne '';
-}
-
-# Disables copying a loader to the MBR.
-sub set_no_loader {
-    die "can't specify both --loader and --no-loader\n"
-      if defined ($include_loader) && $include_loader;
-    $include_loader = 0;
-}
-
-# Figure out whether to include a loader.
-$include_loader = exists ($parts{KERNEL}) && $format eq 'partitioned'
-  if !defined ($include_loader);
-die "can't write loader to raw disk\n" if $include_loader && $format eq 'raw';
-die "can't write command-line arguments without --loader or --kernel\n"
-  if @kernel_args && !$include_loader;
-print STDERR "warning: --loader only makes sense without --kernel "
-  . "if this disk will be used to load a kernel from another disk\n"
-  if $include_loader && !exists ($parts{KERNEL});
-
-# Open disk.
-my ($disk_handle);
-open ($disk_handle, '>', $disk_fn) or die "$disk_fn: create: $!\n";
-
-# Read loader.
-my ($loader);
-$loader = read_loader ($loader_fn) if $include_loader;
-
-# Write disk.
-my (%disk) = %parts;
-$disk{DISK} = $disk_fn;
-$disk{HANDLE} = $disk_handle;
-$disk{ALIGN} = $align;
-$disk{GEOMETRY} = %geometry;
-$disk{FORMAT} = $format;
-$disk{LOADER} = $loader;
-$disk{ARGS} = \@kernel_args;
-assemble_disk (%disk);
-
-# Done.
-exit 0;
-
-sub usage {
-    print <<'EOF';
+USAGE = """\
 pintos-mkdisk, a utility for creating Pintos virtual disks
 Usage: pintos-mkdisk [OPTIONS] DISK [-- ARGUMENT...]
 where DISK is the virtual disk to create,
@@ -129,6 +38,86 @@ Partitioned format output options:
   --align=none             Don't align partitions at all, to save space
 Other options:
   -h, --help               Display this help message.
-EOF
-    exit ($_[0]);
-}
+"""
+
+
+def build_parser() -> pc.UsageParser:
+    """Create the command-line parser."""
+    parser = pc.UsageParser(prog='pintos-mkdisk', add_help=False)
+    parser.add_argument('-h', '--help', action='store_true')
+
+    # Partition sources are recorded in order so that a second source for
+    # the same partition is reported where it occurs.
+    for role in pc.ROLE_ORDER:
+        parser.add_argument(f'--{role}', action=pc.OrderedAction,
+                            const=(role, 'file'))
+        parser.add_argument(f'--{role}-from', action=pc.OrderedAction,
+                            const=(role, 'from'))
+        if role != 'kernel':
+            parser.add_argument(f'--{role}-size', action=pc.OrderedAction,
+                                const=(role, 'size'))
+
+    parser.add_argument('--format', dest='disk_format',
+                        choices=('partitioned', 'raw'), default='partitioned')
+    parser.add_argument('--loader', nargs='?', const='', default=None)
+    parser.add_argument('--no-loader', action='store_true')
+    parser.add_argument('--geometry')
+    parser.add_argument('--align')
+    parser.add_argument('disk', nargs='*')
+    return parser
+
+
+def main(argv: List[str]) -> int:
+    """Run pintos-mkdisk; return the exit status."""
+    options, kernel_args = pc.split_kernel_args(argv)
+    parser = build_parser()
+    namespace = parser.parse_args(options, argparse.Namespace(ordered=[]))
+    if namespace.help:
+        print(USAGE, end='')
+        return 0
+    if len(namespace.disk) != 1:
+        print(USAGE, end='', file=sys.stderr)
+        return 1
+    disk_name = namespace.disk[0]
+    kernel_args = kernel_args or []
+
+    parts: Dict[str, pc.Partition] = {}
+    for (role, source), arg in namespace.ordered:
+        pc.register_partition(parts, role, source, arg)
+    geometry = (pc.parse_geometry(namespace.geometry)
+                if namespace.geometry is not None else pc.Geometry())
+    align = (pc.check_alignment(namespace.align)
+             if namespace.align is not None else 'bochs')
+    if os.path.exists(disk_name):
+        raise pc.PintosError(f'{disk_name}: already exists')
+
+    # Figure out whether to include a loader.
+    include_loader = namespace.loader is not None
+    if include_loader and namespace.no_loader:
+        raise pc.PintosError("can't specify both --loader and --no-loader")
+    if not include_loader and not namespace.no_loader:
+        include_loader = ('kernel' in parts
+                          and namespace.disk_format == 'partitioned')
+    if include_loader and namespace.disk_format == 'raw':
+        raise pc.PintosError("can't write loader to raw disk")
+    if kernel_args and not include_loader:
+        raise pc.PintosError("can't write command-line arguments "
+                             'without --loader or --kernel')
+    if include_loader and 'kernel' not in parts:
+        pc.warn('--loader only makes sense without --kernel if this disk '
+                'will be used to load a kernel from another disk')
+
+    loader: Optional[bytes] = None
+    if include_loader:
+        loader = pc.read_loader(namespace.loader or None)
+
+    with open(disk_name, 'wb', buffering=0) as disk:
+        pc.assemble_disk(disk, disk_name, parts, align=align,
+                         geometry=geometry,
+                         disk_format=namespace.disk_format, loader=loader,
+                         args=kernel_args)
+    return 0
+
+
+if __name__ == '__main__':
+    pc.run_tool(main)
