@@ -50,8 +50,8 @@ lib_SRC += lib/ustar.c			# Unix standard tar format utilities.
 
 # Kernel-specific library code.
 lib/kernel_SRC  = lib/kernel/debug.c	# Debug helpers.
-lib/kernel_SRC += lib/kernel/list.c	# Doubly-linked lists.
 ifneq ($(USE_RUST),1)
+lib/kernel_SRC += lib/kernel/list.c	# Doubly-linked lists (Rust: rust/src/list.rs).
 lib/kernel_SRC += lib/kernel/bitmap.c	# Bitmaps (Rust: rust/src/bitmap.rs).
 endif
 lib/kernel_SRC += lib/kernel/hash.c	# Hash tables.
@@ -86,13 +86,17 @@ threads/kernel.lds.s: threads/kernel.lds.S threads/loader.h
 # Rust static library (see rust/).  Cargo decides what needs rebuilding; the
 # archive is only touched when something changed, so kernel.o is not relinked
 # needlessly.  RUST_FEATURES is set per project in */Make.vars.
+
+
+## This is for NORMAL stable rust
+export RUSTC_BOOTSTRAP := 1
 ifeq ($(USE_RUST),1)
 RUST_LIB = $(CURDIR)/rust-target/i686-pintos/release/libpintos_rs.a
 kernel.bin: CPPFLAGS += -DRUST
 
 $(RUST_LIB): FORCE
 	cd $(SRCDIR)/rust && env -u MAKEFLAGS -u MFLAGS CARGO_TARGET_DIR=$(CURDIR)/rust-target \
-		$(CARGO) build --release --features "$(RUST_FEATURES)"
+		$(CARGO) build  -Zjson-target-spec --release --features  "$(RUST_FEATURES)"
 
 FORCE:
 endif

@@ -110,11 +110,59 @@ links the `no_std` static library in `rust/` into `kernel.o`; `USE_RUST=0` build
   Target is the custom `rust/i686-pintos.json`; the Makefile runs cargo with `-Zbuild-std`.
 - Milestone 0/1: Rust runtime (panic handler -> Pintos `PANIC`, allocator over kernel `malloc`, `kprintln!`).
 - Milestone 2: `lib/kernel/bitmap.c` replaced by `rust/src/bitmap.rs` (same C ABI, bounds-checked).
+- Milestone 3: `lib/kernel/list.c` replaced by `rust/src/list.rs` (same C ABI and struct layout; the C `ASSERT`s are kept as `assert!`s).
 - `threads/kernel.lds.S` now also matches `.text.*`, `.data.*`, `.bss.*` so Rust's per-symbol sections land inside the zeroed BSS.
 - `pintos -- -q rust-selftest` runs the in-kernel Rust self-tests.
 - `rust/check.sh [--record] [project...]` runs stock `make check` for threads/userprog/vm/filesys and diffs pass/FAIL against
   `rust/baseline/` (recorded from the stock C kernel). `rust/baseline/flaky.txt` lists tests that vary in the all-C kernel.
 - Planned (not started): `fillgaps/` holding the minimal student-implemented userprog pieces (syscalls, arg passing, wait) in Rust.
+
+### Building and running the Rust kernel
+
+1. **Install the toolchain (once).** The kernel needs a nightly Rust with `rust-src` (for `-Zbuild-std`).
+   Install [rustup](https://rustup.rs); inside the repo it then picks up the pinned nightly from
+   `rust/rust-toolchain.toml` automatically and fetches `rust-src` on first use.
+   Also run `./setup-mac.sh` if you have not yet installed `i686-elf-gcc` and QEMU.
+2. **Set up the shell** (from the repo root):
+
+   ```sh
+   source env.sh
+   export PATH=$HOME/.cargo/bin:$PATH     # so `cargo` is found
+   ```
+
+3. **Build.** `USE_RUST` defaults to 1, so a normal build already links the Rust code:
+
+   ```sh
+   cd threads && make                     # first time only: creates build/ (may print the cowsay gag and exit 1; just continue)
+   cd build && make -j8
+   ```
+
+   The Rust library is built into `<project>/build/rust-target/`. Build any other project (`userprog`, `vm`, `filesys`)
+   the same way. To build the original all-C kernel instead, run `make clean` and rebuild with `USE_RUST=0`
+   (for example `USE_RUST=0 make -j8`); always `make clean` after changing `USE_RUST`.
+4. **Run the Rust self-tests** inside the kernel (prints one `(rust-selftest) ok: ...` line per check):
+
+   ```sh
+   cd threads/build && pintos --qemu -v -k -T 60 -- -q rust-selftest
+   ```
+
+   For `filesys`/`vm` builds add `--filesys-size=2` and `-f` (and `--swap-size=4` for `vm`), as for any other run.
+5. **Check against stock behavior.** From the repo root:
+
+   ```sh
+   rust/check.sh                  # all four projects with Rust, plus rust-selftest
+   USE_RUST=0 rust/check.sh       # the all-C kernel
+   rust/check.sh threads          # one project
+   ```
+
+   Do not use `--record` unless you intend to rewrite the baselines (and only from a `USE_RUST=0` build).
+
+If you have no rustup, Homebrew's stable `rust` (which includes `rust-src`) can build the kernel when you set
+`RUSTC_BOOTSTRAP=1` in the environment (`RUSTC_BOOTSTRAP=1 rust/check.sh`). This is a workaround, not the pinned
+toolchain, so results may differ from the intended nightly.
+
+Notes for writing kernel Rust: kernel stacks are 4 KB, so avoid large stack arrays and std routines that use them
+(for example `slice::sort`, whose stable sort keeps a 4 KB scratch buffer on the stack).
 
 ## License
 

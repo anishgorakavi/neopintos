@@ -32,3 +32,4 @@ export PINTOS_QEMU = qemu-system-i386
 # Needs the nightly toolchain pinned in rust/rust-toolchain.toml (./setup-rust.sh).
 USE_RUST ?= 1
 CARGO = cargo
+CARGO_FLAGS = fun

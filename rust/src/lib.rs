@@ -19,6 +19,7 @@ pub mod rt;
 pub mod sys;
 
 pub mod bitmap;
+pub mod list;
 mod selftest;
 
 /// Called once from `main()` after `malloc_init()`.  Silent by design: stock Pintos

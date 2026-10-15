@@ -16,7 +16,7 @@
 
 /* Current cursor position.  (0,0) is in the upper left corner of
    the display. */
-static size_t cx, cy;
+static size_t cursorX, cursorY;
 
 /* Attribute value for gray text on a black background. */
 #define GRAY_ON_BLACK 0x07
@@ -24,7 +24,7 @@ static size_t cx, cy;
 /* Framebuffer.  See [FREEVGA] under "VGA Text Mode Operation".
    The character at (x,y) is fb[y][x][0].
    The attribute at (x,y) is fb[y][x][1]. */
-static uint8_t (*fb)[COL_CNT][2];
+static uint8_t (*frame_buffer)[COL_CNT][2];
 
 static void clear_row (size_t y);
 static void cls (void);
@@ -39,8 +39,10 @@ static void init (void)
   static bool inited;
   if (!inited)
     {
-      fb = ptov (0xb8000);
-      find_cursor (&cx, &cy);
+     // VGA text buffer. IBM decided 0xB8000 was the address.
+     // https://wiki.osdev.org/VGA_Text_Mode
+      frame_buffer = ptov (0xb8000); 
+      find_cursor (&cursorX, &cursorY);
       inited = true;
     }
 }
@@ -66,17 +68,17 @@ void vga_putc (int c)
         break;
 
       case '\b':
-        if (cx > 0)
-          cx--;
+        if (cursorX > 0)
+          cursorX--;
         break;
 
       case '\r':
-        cx = 0;
+        cursorX = 0;
         break;
 
       case '\t':
-        cx = ROUND_UP (cx + 1, 8);
-        if (cx >= COL_CNT)
+        cursorX = ROUND_UP (cursorX + 1, 8);
+        if (cursorX >= COL_CNT)
           newline ();
         break;
 
@@ -87,9 +89,9 @@ void vga_putc (int c)
         break;
 
       default:
-        fb[cy][cx][0] = c;
-        fb[cy][cx][1] = GRAY_ON_BLACK;
-        if (++cx >= COL_CNT)
+        frame_buffer[cursorY][cursorX][0] = c;
+        frame_buffer[cursorY][cursorX][1] = GRAY_ON_BLACK;
+        if (++cursorX >= COL_CNT)
           newline ();
         break;
     }
@@ -108,7 +110,7 @@ static void cls (void)
   for (y = 0; y < ROW_CNT; y++)
     clear_row (y);
 
-  cx = cy = 0;
+  cursorX = cursorY = 0;
   move_cursor ();
 }
 
@@ -119,8 +121,8 @@ static void clear_row (size_t y)
 
   for (x = 0; x < COL_CNT; x++)
     {
-      fb[y][x][0] = ' ';
-      fb[y][x][1] = GRAY_ON_BLACK;
+      frame_buffer[y][x][0] = ' ';
+      frame_buffer[y][x][1] = GRAY_ON_BLACK;
     }
 }
 
@@ -129,12 +131,12 @@ static void clear_row (size_t y)
    screen, scrolls the screen upward one line. */
 static void newline (void)
 {
-  cx = 0;
-  cy++;
-  if (cy >= ROW_CNT)
+  cursorX = 0;
+  cursorY++;
+  if (cursorY >= ROW_CNT)
     {
-      cy = ROW_CNT - 1;
-      memmove (&fb[0], &fb[1], sizeof fb[0] * (ROW_CNT - 1));
+      cursorY = ROW_CNT - 1;
+      memmove (&frame_buffer[0], &frame_buffer[1], sizeof frame_buffer[0] * (ROW_CNT - 1));
       clear_row (ROW_CNT - 1);
     }
 }
@@ -143,7 +145,7 @@ static void newline (void)
 static void move_cursor (void)
 {
   /* See [FREEVGA] under "Manipulating the Text-mode Cursor". */
-  uint16_t cp = cx + COL_CNT * cy;
+  uint16_t cp = cursorX + COL_CNT * cursorY;
   outw (0x3d4, 0x0e | (cp & 0xff00));
   outw (0x3d4, 0x0f | (cp << 8));
 }

@@ -76,6 +76,19 @@ static void locate_block_devices (void);
 static void locate_block_device (enum block_type, const char *name);
 #endif
 
+
+/**
+ * Author: Anish Gorakavi
+ * @brief Intentionally cause a segfault by well, null derefeferencing. Use this to test your debugging 
+ * facilities
+ *returns, a kernel panic, segfault IDK?
+ */
+void segfault_test() {
+  printf("INTENTIONALLY SEGFAULTING!!!!!!!\n");
+  /*int* p = 0; //null basically
+  *p = 42; */
+}
+
 /* Pintos main program. */
 int main (void)
 {
@@ -134,7 +147,8 @@ int main (void)
 #endif
 
   printf ("Boot complete.\n");
-
+  //UNCOMMENT if you really want to test segfaults
+  segfault_test(); //null deref test
   /* Run actions specified on kernel command line. */
   run_actions (argv);
 
