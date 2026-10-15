@@ -6,3 +6,6 @@ utils/squish-unix
 *.d
 .DS_Store
 rust/target/
+
+
+.cache

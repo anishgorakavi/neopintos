@@ -85,8 +85,8 @@ static void locate_block_device (enum block_type, const char *name);
  */
 void segfault_test() {
   printf("INTENTIONALLY SEGFAULTING!!!!!!!\n");
-  /*int* p = 0; //null basically
-  *p = 42; */
+  int* p = 0; //null basically
+  *p = 42; 
 }
 
 /* Pintos main program. */

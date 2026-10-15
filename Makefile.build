@@ -1,6 +1,10 @@
 # -*- makefile -*-
 
 # WARNING: Only edit me in the src/ directory!  (not in build/!)
+#CONSTANTS to edit
+PANIC_ON_INTERRUPT := 1
+
+
 
 SRCDIR = ../..
 
@@ -9,6 +13,12 @@ all: kernel.bin loader.bin
 include ../../Make.config
 include ../Make.vars
 include ../../tests/Make.tests
+
+
+#UGLY PLUMBING booleans
+ifeq ($(PANIC_ON_INTERRUPT),1)
+    CPPFLAGS += -DPANIC_ON_INTERRUPT
+endif
 
 # Compiler and assembler options.
 kernel.bin: CPPFLAGS += -I$(SRCDIR)/lib/kernel

@@ -75,3 +75,12 @@ turnin_fs: turnin.tar
 	@echo "         Your README.filesys is correctly filled out."
 	@echo "         Your programming_log.filesys reflects your programming work on this project."
 	@echo "If either of those items are not done, please update your submission and run the make turnin command again.  We also recommend you review the Turnin Checklist, which is linked from the main project page." 
+
+bear:
+	echo "bear hugs"
+	@if bear -- $(MAKE); then \
+		echo "Build successful!"; \
+	else \
+		echo "BRO THE BUILD FAILED 💀"; \
+		exit 1; \
+	fi
