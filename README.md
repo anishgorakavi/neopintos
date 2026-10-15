@@ -123,8 +123,8 @@ links the `no_std` static library in `rust/` into `kernel.o`; `USE_RUST=0` build
 - Toolchain: nightly pinned in `rust/rust-toolchain.toml` (needs `rustup` with `rust-src`; `cargo` must be on `PATH`).
   Target is the custom `rust/i686-pintos.json`; the Makefile runs cargo with `-Zbuild-std`.
 - Milestone 0/1: Rust runtime (panic handler -> Pintos `PANIC`, allocator over kernel `malloc`, `kprintln!`).
-- Milestone 2: `lib/kernel/bitmap.c` replaced by `rust/src/bitmap.rs` (same C ABI, bounds-checked).
-- Milestone 3: `lib/kernel/list.c` replaced by `rust/src/list.rs` (same C ABI and struct layout; the C `ASSERT`s are kept as `assert!`s).
+- Milestone 2: `lib/kernel/bitmap.c` replaced by `lib/kernel/bitmap.rs` (same C ABI, bounds-checked).
+- Milestone 3: `lib/kernel/list.c` replaced by `lib/kernel/list.rs` (same C ABI and struct layout; the C `ASSERT`s are kept as `assert!`s).
 - `threads/kernel.lds.S` now also matches `.text.*`, `.data.*`, `.bss.*` so Rust's per-symbol sections land inside the zeroed BSS.
 - `pintos -- -q rust-selftest` runs the in-kernel Rust self-tests.
 - `rust/check.sh [--record] [project...]` runs stock `make check` for threads/userprog/vm/filesys and diffs pass/FAIL against

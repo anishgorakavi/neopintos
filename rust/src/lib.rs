@@ -8,7 +8,9 @@
 //! Layout:
 //!  * [`sys`]  - the FFI boundary: declarations of the C kernel functions Rust calls.
 //!  * [`rt`]   - runtime glue: panic handler, global allocator, `kprintln!`.
-//!  * the remaining modules each replace one C source file (see their module docs).
+//!  * [`bitmap`], [`list`] - each replaces one C source file and lives next to it in
+//!    `lib/kernel/`, wired in with `#[path]`.
+//!  * `selftest` - in-kernel checks for the above.
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -18,9 +20,14 @@ extern crate alloc;
 pub mod rt;
 pub mod sys;
 
+#[path = "../../lib/kernel/bitmap.rs"]
 pub mod bitmap;
+#[path = "../../lib/kernel/list.rs"]
 pub mod list;
 mod selftest;
+
+#[path = "../../threads/mod.rs"]
+pub mod threads;
 
 /// Called once from `main()` after `malloc_init()`.  Silent by design: stock Pintos
 /// boot output must not change.

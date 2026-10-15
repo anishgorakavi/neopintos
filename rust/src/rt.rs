@@ -24,6 +24,13 @@ macro_rules! kprintln {
     }};
 }
 
+#[macro_export]
+macro_rules! kprint {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write as _;
+        let _ = write!($crate::rt::Console, $($arg)*);
+    }};
+}
 /// Fixed-size, always NUL-terminated buffer; excess output is truncated.
 struct CBuf<const N: usize> {
     buf: [u8; N],

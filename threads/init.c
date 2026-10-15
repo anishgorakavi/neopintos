@@ -40,6 +40,7 @@
 
 #ifdef RUST
 /* Rust components (see rust/). */
+void rust_hello(void);
 void rust_init (void);
 void rust_selftest (char **argv);
 #endif
@@ -151,6 +152,7 @@ int main (void)
   //UNCOMMENT if you really want to test segfaults
   //segfault_test(); //null deref test
   /* Run actions specified on kernel command line. */
+  rust_hello();
   run_actions (argv);
 
   /* Finish up. */
