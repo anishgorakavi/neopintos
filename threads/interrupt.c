@@ -380,15 +380,16 @@ static void unexpected_interrupt (const struct intr_frame *f)
      unexpected interrupt the first time and fairly often after
      that, but one that occurs many times will not overwhelm the
      console. */
-  if ((n & (n - 1)) == 0)
-    printf ("Unexpected interrupt %#04x (%s)\n", f->vec_no,
+  if ((n & (n - 1)) == 0) {
+      printf ("Unexpected interrupt %#04x (%s)\n", f->vec_no,
             intr_names[f->vec_no]);
+  }
+
   #ifdef PANIC_ON_INTERRUPT
   unsigned int is_it_ring_0 = f->cs & 0x03; //Voodoo in x86 to check is it ring 3?
   if(is_it_ring_0 == 0) {
-    printf("Unfortunately, the cpu is mad\n");
+    printf("Unfortunately, the cpu crapped out at ring 0\n");
     printf("Inspirational quote: Never gonna give you up. Never gonna let you down\n");
-
     //Beautiful switches
     switch(f->vec_no) {
       case 14:

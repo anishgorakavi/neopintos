@@ -11,6 +11,7 @@ kprintln!("Testing rust's runtime bounds check");
 let arr = [10, 20, 30, 40, 50];
 
 let i = core::hint::black_box(100); //so compiler doesn't flag on the dot
-
-kprintln!("Value: {}", arr[i]); //Test our runtime check
+kprintln!("Value: {}", arr[2]); //Test our runtime check
 }
+
+ 

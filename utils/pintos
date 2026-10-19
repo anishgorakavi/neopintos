@@ -810,7 +810,7 @@ def run_vm(opts: Options) -> None:
 
 def qemu_video_args(command_list: list) -> None:
     """
-    Specifies appropriate arguments to a qemu command list based on the platform of the host machine.
+    Specifies appropriate arguments to a qemu command list based on the platform of the host machine.\n
     Author: Anish Gorakavi
     """
     match sys.platform:
