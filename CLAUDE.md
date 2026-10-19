@@ -34,7 +34,7 @@ cd build && make -j8 && make check -j4
 - `USE_RUST` (Make.tools, default 1) links `rust/` as a `no_std` staticlib into `kernel.o` (`Makefile.build`, `$(RUST_LIB)`, built into `<proj>/build/rust-target`). `USE_RUST=0` builds the original all-C kernel. After flipping it, `make clean` first; objects depend on `-DRUST`.
 - Toolchain: nightly pinned in `rust/rust-toolchain.toml` (`nightly-2026-08-01`, with `rust-src`), custom target `rust/i686-pintos.json`, `-Zbuild-std=core,alloc` via `rust/.cargo/config.toml`. `cargo` must be on `PATH`. Makefile runs cargo with `env -u MAKEFLAGS` to avoid a jobserver warning.
 - Per-project Cargo features come from `RUST_FEATURES` in each `<proj>/Make.vars` (`userprog`, `filesys`, `vm`), mirroring the `-D` flags. Rust code calling a C symbol that only exists in some projects must be behind the matching feature.
-- Crate layout (`rust/src/`): `sys.rs` (FFI declarations), `rt.rs` (panic handler -> `debug_panic`, `#[global_allocator]` over kernel `malloc`, `kprintln!`), `selftest.rs`. Ported subsystems live beside their C originals and are included via `#[path]` in `lib.rs`: `lib/kernel/bitmap.rs`, `lib/kernel/list.rs`. `rust_init()` is called from `threads/init.c` after `malloc_init()` and must stay silent (stock boot output must not change). Action `rust-selftest` runs in-kernel checks.
+- Crate layout (`rust/src/`): `sys.rs` (FFI declarations), `rt.rs` (panic handler -> `debug_panic`, `#[global_allocator]` over kernel `malloc`, `kprintln!`), `selftest.rs`. Ported subsystems live beside their C originals and are included via `#[path]` in `lib.rs`: `lib/kernel/bitmap.rs`, `lib/kernel/list.rs`, `lib/stdio.rs` (printf family, `__vprintf`, `hex_dump`), `lib/stdlib.rs` (`atoi`, `qsort`, `bsearch`, `sort`), `lib/random.rs`. The `lib/*.c` ones are **kernel-only** replacements: user programs (`Makefile.userprog`) still build the C. `vprintf`/`puts`/`putchar` stay in `lib/kernel/console.c` (console lock + hardware). `string.c` stays C on purpose: LLVM lowers loops to `memcpy`/`memset` calls, so a Rust `memcpy` can recurse into itself; `arithmetic.c` provides compiler_builtins' helpers. `rust_init()` is called from `threads/init.c` after `malloc_init()` and must stay silent (stock boot output must not change). Action `rust-selftest` runs in-kernel checks.
 - Ported components keep the exact C ABI/struct layout (e.g. `struct bitmap`), and the C source is excluded from the build when `USE_RUST=1` (see `lib/kernel_SRC` in `Makefile.build`).
 
 Gotchas learned the hard way:
@@ -59,10 +59,10 @@ It rebuilds clean, runs `make check`, and diffs pass/FAIL per test against `rust
 
 ## Status and next steps
 
-Done: Rust runtime, Rust bitmap, self-test, baseline harness. Not done / planned:
+Done: Rust runtime, Rust bitmap, list, stdio/stdlib/random, self-test, baseline harness. `rust/src/selftest_printf.rs` is generated: expectations come from running the original `lib/stdio.c` on the host (don't hand-edit; regenerate from C if cases change). Keep stacks in selftests small (e.g. `[T]::sort` has a 4 KB stack buffer; use `sort_unstable`). Not done / planned:
 
 - **`fillgaps/`:** minimal student-implemented pieces needed to validate userprog Rust code (arg passing, `exec`/`wait`/`exit`, syscalls, user-pointer validation). Plan: mirror the repo tree under `fillgaps/`, shadow stock files via `vpath` (and `-I fillgaps`) only when `FILLGAPS=1`, keep Rust gap modules in `fillgaps/rust/` behind a `fillgaps` feature, and keep default builds identical to stock. Only fill what is needed to exercise the Rust code (skip e.g. rox tests, scheduler, vm).
-- Port `list.c` (and maybe `hash.c`) with the same ABI.
+- Port `hash.c`, `ustar.c` with the same ABI.
 - `setup-rust.sh` is referenced by `Make.tools` comments but does not exist yet.
 - vm/filesys only verified to boot and match the all-fail baseline; Rust bitmap file read/write paths are untested.
 - Nothing from the Rust work is committed yet.

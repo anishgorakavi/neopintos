@@ -5,16 +5,7 @@ use core::fmt::{self, Write};
 
 use crate::sys;
 
-/// `core::fmt` sink that writes to the Pintos console (`putbuf`, which takes the console lock).
-pub struct Console;
-
-impl Write for Console {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        // SAFETY: putbuf reads exactly `s.len()` bytes from a valid slice.
-        unsafe { sys::putbuf(s.as_ptr().cast(), s.len()) };
-        Ok(())
-    }
-}
+pub use crate::console::Console;
 
 #[macro_export]
 macro_rules! kprintln {
@@ -32,17 +23,25 @@ macro_rules! kprint {
     }};
 }
 /// Fixed-size, always NUL-terminated buffer; excess output is truncated.
-struct CBuf<const N: usize> {
+pub struct CBuf<const N: usize> {
     buf: [u8; N],
     len: usize,
 }
 
 impl<const N: usize> CBuf<N> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { buf: [0; N], len: 0 }
     }
-    fn as_ptr(&self) -> *const c_char {
+    pub fn as_ptr(&self) -> *const c_char {
         self.buf.as_ptr().cast()
+    }
+    /// The text written so far, without the NUL.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+    /// Bytes written so far (excluding the NUL).
+    pub fn len(&self) -> usize {
+        self.len
     }
 }
 

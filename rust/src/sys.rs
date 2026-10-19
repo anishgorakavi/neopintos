@@ -15,6 +15,7 @@ extern "C" {
     ) -> !;
     // lib/stdio.h
     pub fn putbuf(buffer: *const c_char, n: usize);
+    pub fn vprintf(format: *const c_char, args: core::ffi::VaList<'_>) -> c_int;
     // threads/malloc.h
     pub fn malloc(size: usize) -> *mut c_void;
     pub fn free(ptr: *mut c_void);

@@ -8,6 +8,8 @@
 //! Layout:
 //!  * [`sys`]  - the FFI boundary: declarations of the C kernel functions Rust calls.
 //!  * [`rt`]   - runtime glue: panic handler, global allocator, `kprintln!`.
+//!  * [`stdio`], [`stdlib`], [`random`] - the printf family, `atoi`/`qsort`/`bsearch` and the
+//!    PRNG, replacing `lib/{stdio,stdlib,random}.c` in the kernel (user programs keep the C).
 //!  * [`bitmap`], [`list`] - each replaces one C source file and lives next to it in
 //!    `lib/kernel/`, wired in with `#[path]`.
 //!  * `selftest` - in-kernel checks for the above.
@@ -19,12 +21,21 @@ extern crate alloc;
 #[macro_use]
 pub mod rt;
 pub mod sys;
+pub mod ffi;
+pub mod console;
 
+#[path = "../../lib/stdio.rs"]
+pub mod stdio;
+#[path = "../../lib/stdlib.rs"]
+pub mod stdlib;
+#[path = "../../lib/random.rs"]
+pub mod random;
 #[path = "../../lib/kernel/bitmap.rs"]
 pub mod bitmap;
 #[path = "../../lib/kernel/list.rs"]
 pub mod list;
 mod selftest;
+mod selftest_printf;
 
 #[path = "../../threads/mod.rs"]
 pub mod threads;

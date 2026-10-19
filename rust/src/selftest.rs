@@ -21,6 +21,9 @@ pub fn run() {
     bitmap_tests();
     list_tests();
     list_edge_tests();
+    stdio_tests();
+    stdlib_tests();
+    random_tests();
     // SAFETY: as above.
     let n = unsafe { CHECKS };
     kprintln!("(rust-selftest) end: {} checks passed", n);
@@ -455,4 +458,97 @@ fn list_edge_tests() {
         ok &= sound(&mut b) == Some(5) && list_size(&mut b) == 5;
         check(ok, "list: reverse involution and invariants after remove/pop/push");
     }
+}
+
+fn stdio_tests() {
+    use crate::stdio::snprintf;
+    use core::ffi::c_char;
+
+    let bad = crate::selftest_printf::first_mismatch();
+    check(bad.is_none(), "printf matches the C implementation on all fixtures");
+    kprintln!("(rust-selftest) printf fixtures: {}", crate::selftest_printf::COUNT);
+
+    // Truncation: at most size-1 chars plus NUL, return value is the untruncated length.
+    let mut small = [0xffu8; 8];
+    // SAFETY: format and arguments match; the buffer size is passed.
+    let written = unsafe { snprintf(small.as_mut_ptr().cast::<c_char>(), 8, c"%s".as_ptr(), c"truncated-string".as_ptr()) };
+    check(written == 16 && &small == b"truncat\0", "snprintf truncation");
+    let mut one = [0xffu8; 2];
+    // SAFETY: as above.
+    let written = unsafe { snprintf(one.as_mut_ptr().cast::<c_char>(), 1, c"%d".as_ptr(), 12345i32) };
+    check(written == 5 && one == [0, 0xff], "snprintf size 1");
+    // SAFETY: size 0 must not write at all.
+    let written = unsafe { snprintf(one.as_mut_ptr().cast::<c_char>(), 0, c"%d".as_ptr(), 1i32) };
+    check(written == 1 && one == [0, 0xff], "snprintf size 0");
+}
+
+fn stdlib_tests() {
+    use crate::stdlib::*;
+    use core::ffi::{c_int, c_void};
+
+    // SAFETY: all strings are NUL-terminated literals.
+    let ok = unsafe {
+        atoi(c"42".as_ptr()) == 42
+            && atoi(c"  \t-17x".as_ptr()) == -17
+            && atoi(c"+5".as_ptr()) == 5
+            && atoi(c"".as_ptr()) == 0
+            && atoi(c"-2147483648".as_ptr()) == i32::MIN
+            && atoi(c"2147483647".as_ptr()) == i32::MAX
+    };
+    check(ok, "atoi");
+
+    extern "C" fn cmp(a: *const c_void, b: *const c_void) -> c_int {
+        // SAFETY: only called on i32 elements below.
+        let (a, b) = unsafe { (*a.cast::<i32>(), *b.cast::<i32>()) };
+        a.cmp(&b) as c_int
+    }
+    let mut seed = 99u32;
+    let mut all_ok = true;
+    for cnt in [0usize, 1, 2, 3, 10, 257] {
+        let mut v: Vec<i32> = (0..cnt)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((seed >> 16) % 50) as i32 - 25
+            })
+            .collect();
+        let mut want = v.clone();
+        want.sort_unstable(); // (stable `sort` keeps a 4 KB scratch buffer on the stack)
+        // SAFETY: v holds `cnt` i32s and cmp reads i32s.
+        unsafe { qsort(v.as_mut_ptr().cast(), cnt, 4, Some(cmp)) };
+        all_ok &= v == want;
+        for key in -26..=26i32 {
+            // SAFETY: as above.
+            let hit = unsafe { bsearch((&key as *const i32).cast(), v.as_ptr().cast(), cnt, 4, Some(cmp)) };
+            all_ok &= if want.contains(&key) {
+                // SAFETY: a non-null result points into `v`.
+                !hit.is_null() && unsafe { *hit.cast::<i32>() } == key
+            } else {
+                hit.is_null()
+            };
+        }
+    }
+    check(all_ok, "qsort + bsearch match std (6 sizes, with duplicates)");
+
+    // Elements wider than a word, to exercise the swap path.
+    let mut recs: Vec<[u32; 3]> = (0..40u32).rev().map(|i| [i, i * 7, !i]).collect();
+    extern "C" fn cmp_rec(a: *const c_void, b: *const c_void, _aux: *mut c_void) -> c_int {
+        // SAFETY: elements are [u32; 3].
+        let (a, b) = unsafe { (*a.cast::<[u32; 3]>(), *b.cast::<[u32; 3]>()) };
+        a[0].cmp(&b[0]) as c_int
+    }
+    // SAFETY: recs holds 40 records of 12 bytes.
+    unsafe { sort(recs.as_mut_ptr().cast(), 40, 12, Some(cmp_rec), core::ptr::null_mut()) };
+    check(recs.iter().enumerate().all(|(i, r)| *r == [i as u32, i as u32 * 7, !(i as u32)]), "sort with aux, 12-byte records");
+}
+
+fn random_tests() {
+    use crate::random::Rc4;
+    // Expected bytes come from running the original lib/random.c with random_init(12345).
+    let mut generator = Rc4::new();
+    generator.seed(12345);
+    let mut b = [0u8; 20];
+    generator.fill(&mut b);
+    let want = [0x05, 0x36, 0x74, 0xc5, 0xbc, 0x6b, 0x84, 0xee, 0x36, 0xc6, 0x8a, 0xb8, 0xe6, 0x15, 0xa4, 0x0d];
+    check(b[..16] == want, "PRNG byte stream matches the C implementation");
+    check(u32::from_le_bytes(b[16..20].try_into().unwrap()) == 3025151672, "PRNG ulong matches the C implementation");
 }
